@@ -1,0 +1,15 @@
+# Python virtual environment
+venv/
+
+# Hugging Face cache
+.cache_hf/
+
+# Environment variables
+.env
+
+# Temporary directory
+temp/
+
+# Python cache directories (recursive)
+__pycache__/
+
