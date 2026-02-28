@@ -1,4 +1,4 @@
-# MeetBot - Audio Transcription & Speaker Diarization
+# MeetBot - Meeting Transcription, Speaker Diarization & Query retrieval
 
 Turn your audio recordings into searchable transcripts with automated speaker identification. MeetBot combines OpenAI's Whisper for accurate transcription and Pyannote for speaker diarization, then lets you ask questions about the content using semantic search powered by ChromaDB.
 
