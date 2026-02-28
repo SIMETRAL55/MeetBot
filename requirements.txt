@@ -1,0 +1,149 @@
+# ============================================================================
+# MeetBot - Complete Requirements File
+#
+# Full set of all dependencies needed for a new environment setup
+# ============================================================================
+
+# ============================================================================
+# Core Dependencies
+# ============================================================================
+python-dotenv>=1.0.0          # Load environment variables from .env
+pydantic>=2.0                 # Data validation using Python type annotations
+pydantic-settings>=2.0        # Settings management in Pydantic
+requests>=2.28                # HTTP client library
+tqdm>=4.65                    # Progress bars
+toolz>=0.12.0                 # Functional programming utilities
+
+
+# ============================================================================
+# Audio Processing & Transcription
+# ============================================================================
+openai-whisper>=20240314      # OpenAI's Whisper ASR model (CPU/GPU)
+pydub>=0.25.1                 # Audio file format conversion
+ffmpeg-python>=0.2.1          # Python wrapper for ffmpeg (format conversion, silence detection)
+
+# Note: ffmpeg binary must be installed separately:
+#   Ubuntu/Debian: sudo apt-get install ffmpeg
+#   macOS: brew install ffmpeg
+#   Windows: Download from https://ffmpeg.org/download.html
+
+
+# ============================================================================
+# Speaker Diarization
+# ============================================================================
+pyannote.audio==3.2.0         # Speaker diarization and verification
+torch>=2.0.0                  # PyTorch (required by Pyannote and Whisper)
+
+# For GPU support with CUDA 11.8+:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+# For GPU support with CUDA 12.1+:
+#   pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+#
+# For CPU only:
+#   pip install torch torchvision torchaudio
+
+
+# ============================================================================
+# Embeddings & Vector Stores (RAG)
+# ============================================================================
+sentence-transformers>=2.2.0  # State-of-the-art sentence embeddings
+chromadb>=0.4.0               # Vector database for document retrieval
+numpy<2.0                     # Numerical computing (required by embeddings)
+
+
+# ============================================================================
+# LangChain & RAG Ecosystem
+# ============================================================================
+langchain>=0.1.0              # Framework for building with LLMs
+langchain-core>=0.1.0         # Core types and interfaces
+langchain-community>=0.0.1    # Community integrations
+langchain-huggingface>=0.0.0  # HuggingFace integration for LangChain
+langchain-chroma>=0.1.0       # Chroma vector store integration
+
+
+# ============================================================================
+# LLM & HuggingFace Integrations
+# ============================================================================
+huggingface-hub>=0.18.0       # Download and interact with HuggingFace models
+transformers>=4.30.0          # HuggingFace Transformers library
+
+
+# ============================================================================
+# Optional: Local Quantized LLM Inference (Recommended for Cost Savings)
+# ============================================================================
+# Uncomment to enable local quantized GGUF model inference (like Rakuten-7B)
+#
+# IMPORTANT: Requires CMake and compiler tools
+#
+# Installation for GPU support (CUDA 11.8):
+#   CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+#
+# Installation for GPU support (CUDA 12.1):
+#   CMAKE_ARGS="-DLLAMA_CUDA=on -DCMAKE_CUDA_ARCHITECTURES=native" pip install llama-cpp-python
+#
+# Installation for CPU only:
+#   pip install llama-cpp-python
+
+llama-cpp-python>=0.2.0
+
+
+# ============================================================================
+# Optional: Development & Testing
+# ============================================================================
+# Uncomment for development work
+# pytest>=7.2.0                # Testing framework
+# pytest-asyncio>=0.20.0       # Async test support
+# black>=23.0.0                # Code formatter
+# ruff>=0.1.0                  # Python linter
+
+
+# ============================================================================
+# Setup Notes
+# ============================================================================
+#
+# 1. SYSTEM DEPENDENCIES (Install before pip):
+#    - ffmpeg: Required for audio format conversion and silence detection
+#    - CUDA toolkit (optional, for GPU): Greatly speeds up transcription/diarization
+#    - CMake (optional, for llama-cpp-python): Only if using local LLM
+#
+# 2. GPU SETUP (Recommended):
+#    - NVIDIA GPU + CUDA 11.8 or 12.1+
+#    - Install compatible PyTorch: See torch section above
+#    - Set CMAKE_ARGS before installing llama-cpp-python for GPU support
+#
+# 3. INSTALLATION STEPS:
+#    a) Create virtual environment:
+#       python -m venv venv
+#       source venv/bin/activate  (Linux/macOS) or venv\Scripts\activate (Windows)
+#
+#    b) Upgrade pip:
+#       pip install --upgrade pip
+#
+#    c) For GPU (CUDA 11.8):
+#       pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+#
+#    d) Install this requirements file:
+#       pip install -r requirements.txt
+#
+#    e) For local LLM with GPU support (CUDA 11.8):
+#       CMAKE_ARGS="-DLLAMA_CUDA=on" pip install llama-cpp-python
+#
+#    f) Install package in development mode:
+#       pip install -e .
+#
+# 4. DOWNLOAD/PREPARE MODELS:
+#    - Whisper (small): Auto-downloads on first use (~468 MB)
+#    - Pyannote: Auto-downloads on first use (~500 MB)
+#    - Embeddings: Auto-downloads on first use (~250 MB)
+#    - Local LLM (optional): Download GGUF model to ./rakutenai-7b-instruct-gguf/
+#
+# 5. CONFIGURATION:
+#    - Copy .env.example to .env
+#    - Set HF_API_TOKEN if using HuggingFace models
+#    - Set LOCAL_LLM_MODEL_PATH for local quantized models
+#
+# 6. VERIFY INSTALLATION:
+#    python -c "from meetbot.config import settings; print('✓ MeetBot installed successfully')"
+#
+# ============================================================================

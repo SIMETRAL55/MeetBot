@@ -1,0 +1,174 @@
+# ============================================================================
+# Python & Virtual Environments
+# ============================================================================
+venv/
+env/
+ENV/
+.venv
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+dist/
+build/
+*.egg
+.coverage
+.pytest_cache/
+htmlcov/
+
+
+# ============================================================================
+# IDE & Editor Files
+# ============================================================================
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.project
+.pydevproject
+.settings/
+*.sublime-project
+*.sublime-workspace
+.vim/
+*.iml
+
+
+# ============================================================================
+# Environment & Configuration
+# ============================================================================
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+*.crt
+
+
+# ============================================================================
+# Large Model Files (Do not commit - download/generate locally)
+# ============================================================================
+# Quantized LLM models
+rakutenai-7b-instruct-gguf/
+*.gguf
+*.bin
+
+# Embedding models
+sarashina-embedding-v1-1b/
+*embedding*/
+sentence-transformers-*/
+
+# Whisper models (auto-download on first use)
+models/
+
+# PyTorch models
+*.pt
+*.pth
+
+
+# ============================================================================
+# Large Data & Cache Directories
+# ============================================================================
+# HuggingFace cache (contains downloaded models)
+.cache_hf/
+.cache/
+~/.cache/
+
+# Temporary files
+temp/
+tmp/
+*.tmp
+
+# Generated database files (rebuild locally)
+db/
+*.db
+*.sqlite
+*.sqlite3
+
+# Results and outputs (user-generated, should commit selectively)
+results/
+output/
+outputs/
+
+
+# ============================================================================
+# Audio & Media Files
+# ============================================================================
+# Large audio files (use external storage)
+*.mp3
+*.wav
+*.m4a
+*.flac
+*.ogg
+*.aac
+*.wma
+
+# Video files
+*.mp4
+*.avi
+*.mkv
+*.mov
+*.webm
+
+
+# ============================================================================
+# Prepared/Processed Data
+# ============================================================================
+prepared/
+*.jsonl
+data/
+
+
+# ============================================================================
+# OS & System Files
+# ============================================================================
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+.directory
+
+
+# ============================================================================
+# Logs & Debug
+# ============================================================================
+*.log
+logs/
+debug/
+
+
+# ============================================================================
+# Jupyter & Notebooks
+# ============================================================================
+.ipynb_checkpoints
+*.ipynb
+
+
+# ============================================================================
+# Documentation Build Files
+# ============================================================================
+site/
+.mkdocs/
+
+
+# ============================================================================
+# Miscellaneous
+# ============================================================================
+.DS_Store
+*.bak
+*.swp
+*~
+.project
+.settings
+
