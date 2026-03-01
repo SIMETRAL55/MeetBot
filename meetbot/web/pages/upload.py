@@ -90,8 +90,8 @@ def upload_page() -> None:
                     min=1,
                     max=20,
                     step=1,
-                    format="%.0f",
-                ).classes("flex-1").props("clearable")
+                     ).classes("flex-1").props("clearable")
+               format="%.0f",
 
                 max_speakers = ui.number(
                     label="Max Speakers",
