@@ -2,9 +2,14 @@
 
 import logging
 from typing import List, Dict, Any
-from datetime import timedelta
 
 logger = logging.getLogger(__name__)
+
+# Maximum silence gap (seconds) between two consecutive same-speaker segments
+# that may be merged into a single output segment.  Gap larger than this value
+# preserves the boundary so that pauses / speaker hand-offs are visible.
+# Keep small (0.5 s) to avoid collapsing whole speaker turns into one block.
+MAX_MERGE_GAP: float = 0.5
 
 
 class AlignerService:
@@ -14,32 +19,25 @@ class AlignerService:
     def build_speaker_transcript(
         dia_segments: List[Dict],
         whisper_segments: List[Dict],
+        max_merge_gap: float = MAX_MERGE_GAP,
     ) -> List[Dict[str, Any]]:
         """
         Align transcription with speaker diarization.
 
+        Each Whisper segment is assigned to the diarization speaker who has the
+        most time-overlap with it.  Adjacent segments — same speaker, gap below
+        *max_merge_gap* — are merged into one output segment.
+
         Args:
-            dia_segments: Diarization segments from diarizer
-            whisper_segments: Transcription segments from transcriber
+            dia_segments: Diarization segments from diarizer.
+            whisper_segments: Transcription segments from transcriber.
+            max_merge_gap: Maximum silence gap (s) between same-speaker segments
+                           that are allowed to merge.  Default 0.5 s.
 
         Returns:
-            List of aligned segments with speaker attribution
+            List of aligned segments with speaker attribution.
         """
-        # Import legacy alignment logic
-        import sys
-        from pathlib import Path
-
-        sys.path.insert(
-            0,
-            str(Path(__file__).parent.parent.parent / "source"),
-        )
-
-        try:
-            from align import build_speaker_transcript as align_legacy
-            return align_legacy(dia_segments, whisper_segments)
-        except ImportError:
-            logger.warning("Could not import legacy alignment, using fallback")
-            return _fallback_align(dia_segments, whisper_segments)
+        return _align(dia_segments, whisper_segments, max_merge_gap=max_merge_gap)
 
     def get_aligned_transcript(
         self,
@@ -64,69 +62,102 @@ class AlignerService:
         )
 
 
-def _fallback_align(
+def _align(
     dia_segments: List[Dict],
     whisper_segments: List[Dict],
+    max_merge_gap: float = MAX_MERGE_GAP,
 ) -> List[Dict[str, Any]]:
     """
-    Fallback alignment algorithm if legacy code unavailable.
+    Core alignment: map each Whisper segment to the speaker with maximum
+    time-overlap, then merge only adjacent same-speaker segments whose gap
+    is within *max_merge_gap* seconds.
 
-    Simple strategy: assign each transcription segment to the speaker
-    whose diarization segment has maximum overlap.
+    Design constraints
+    ------------------
+    * Whisper timestamps are the authoritative boundaries.  We never split or
+      re-chunk them — only assign speaker labels and optionally merge.
+    * Merging requires BOTH same speaker AND small gap.  This preserves pauses
+      and prevents whole speaker turns from collapsing into one block.
     """
-    aligned = []
+    logger.debug(
+        "Aligning %d Whisper segments against %d diarization segments "
+        "(max_merge_gap=%.2f s)",
+        len(whisper_segments), len(dia_segments), max_merge_gap,
+    )
+
+    # ── Step 1: assign each Whisper segment a speaker label ──────────────
+    labelled: List[Dict[str, Any]] = []
+    skipped = 0
 
     for trans in whisper_segments:
-        if trans.get("start") is None or trans.get("end") is None:
+        t_start = trans.get("start")
+        t_end   = trans.get("end")
+        if t_start is None or t_end is None:
+            skipped += 1
             continue
 
-        trans_start = trans["start"]
-        trans_end = trans["end"]
-
-        # Find overlapping speaker segment
-        best_speaker = None
-        best_overlap = 0
+        best_speaker: str | None = None
+        best_overlap: float = 0.0
 
         for dia in dia_segments:
-            dia_start = dia.get("start", 0)
-            dia_end = dia.get("end", 0)
-
-            # Calculate overlap duration
-            overlap_start = max(trans_start, dia_start)
-            overlap_end = min(trans_end, dia_end)
-            overlap = max(0, overlap_end - overlap_start)
-
+            d_start = dia.get("start", 0.0)
+            d_end   = dia.get("end",   0.0)
+            overlap = max(0.0, min(t_end, d_end) - max(t_start, d_start))
             if overlap > best_overlap:
                 best_overlap = overlap
                 best_speaker = dia.get("speaker", "Unknown")
 
         if best_speaker is None and dia_segments:
-            # Fallback: assign to nearest speaker
+            # No overlap at all — fall back to nearest segment mid-point
+            mid = (t_start + t_end) / 2.0
             nearest = min(
                 dia_segments,
-                key=lambda d: abs((d.get("start", 0) + d.get("end", 0)) / 2 - (trans_start + trans_end) / 2),
+                key=lambda d: abs((d.get("start", 0) + d.get("end", 0)) / 2.0 - mid),
             )
             best_speaker = nearest.get("speaker", "Unknown")
 
-        aligned.append(
-            {
-                "start": trans_start,
-                "end": trans_end,
-                "speaker": best_speaker or "Unknown",
-                "text": trans.get("text", "").strip(),
-            }
-        )
+        text = trans.get("text", "").strip()
+        if not text:
+            # Keep empty segments — dropping them silently hides content.
+            # Caller can decide what to do with empty strings.
+            pass
 
-    # Merge consecutive same-speaker segments
-    merged = []
-    for seg in aligned:
-        if merged and merged[-1]["speaker"] == seg["speaker"]:
-            # Extend previous segment
-            merged[-1]["end"] = seg["end"]
-            merged[-1]["text"] += " " + seg["text"]
-        else:
-            merged.append(seg)
+        labelled.append({
+            "start":   t_start,
+            "end":     t_end,
+            "speaker": best_speaker or "Unknown",
+            "text":    text,
+        })
 
+    logger.debug(
+        "Labelling done: %d segments assigned, %d skipped (missing timestamps)",
+        len(labelled), skipped,
+    )
+
+    # ── Step 2: merge only when same speaker AND gap ≤ max_merge_gap ─────
+    # The previous code merged unconditionally on same speaker, turning 37
+    # segments into 9 by collapsing entire speaker turns.
+    merged: List[Dict[str, Any]] = []
+    merge_count = 0
+
+    for seg in labelled:
+        if merged:
+            prev = merged[-1]
+            gap  = seg["start"] - prev["end"]
+            if prev["speaker"] == seg["speaker"] and gap <= max_merge_gap:
+                # Same speaker, tiny gap — extend the previous segment
+                prev["end"]   = seg["end"]
+                prev["text"] += (" " if prev["text"] else "") + seg["text"]
+                merge_count  += 1
+                continue
+        merged.append(dict(seg))  # new boundary
+
+    logger.info(
+        "Alignment complete: %d Whisper → %d labelled → %d final segments "
+        "(%d merges, gap threshold=%.2f s)",
+        len(whisper_segments), len(labelled), len(merged),
+        merge_count, max_merge_gap,
+    )
     return merged
 
 
@@ -144,28 +175,6 @@ def format_result_as_json(
     Returns:
         Formatted output dictionary ready for JSON serialization
     """
-    # Import legacy formatter if available
-    import sys
-    from pathlib import Path
-
-    sys.path.insert(
-        0,
-        str(Path(__file__).parent.parent.parent / "source"),
-    )
-
-    try:
-        from align import format_result_as_json as format_legacy
-        return format_legacy(aligned_segments, audio_path)
-    except ImportError:
-        logger.warning("Could not import legacy formatter, using fallback")
-        return _fallback_format(aligned_segments, audio_path)
-
-
-def _fallback_format(
-    aligned_segments: List[Dict],
-    audio_path: str,
-) -> Dict[str, Any]:
-    """Fallback JSON formatter."""
     from pathlib import Path
 
     return {
@@ -173,8 +182,8 @@ def _fallback_format(
         "segments": aligned_segments,
         "n_segments": len(aligned_segments),
         "duration_seconds": (
-            aligned_segments[-1].get("end", 0)
+            aligned_segments[-1].get("end", 0.0)
             if aligned_segments
-            else 0
+            else 0.0
         ),
     }

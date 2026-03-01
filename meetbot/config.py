@@ -82,6 +82,21 @@ class Settings(BaseSettings):
         description="Local path to embedding model directory or HuggingFace model ID",
     )
 
+    HF_MODEL: str = Field(
+        "deepseek-ai/DeepSeek-V3-0324",
+        env="HF_MODEL",
+        description="HuggingFace model ID used for inference via the Inference API",
+    )
+
+    HF_PROVIDER: str = Field(
+        "auto",
+        env="HF_PROVIDER",
+        description=(
+            "HuggingFace Inference provider (e.g. 'sambanova', 'novita', 'cerebras'). "
+            "Set to 'auto' to select the first live provider for the chosen model automatically."
+        ),
+    )
+
     # =========================================================================
     # Transcription Backend Configuration
     # =========================================================================
@@ -107,9 +122,14 @@ class Settings(BaseSettings):
     )
 
     LOCAL_LLM_GPU_LAYERS: int = Field(
-        20,
+        15,
         env="LOCAL_LLM_GPU_LAYERS",
-        description="Number of model layers to offload to GPU (higher = more VRAM, faster)",
+        description=(
+            "Number of model layers to offload to GPU (higher = more VRAM, faster). "
+            "Defaults to 0 (CPU-only) because at query time most VRAM is occupied by "
+            "Pyannote/Whisper residuals. Set to 8 or higher only if you have "
+            ">=1 GiB VRAM free after all other models finish."
+        ),
     )
 
     LOCAL_LLM_CONTEXT_SIZE: int = Field(
@@ -119,9 +139,9 @@ class Settings(BaseSettings):
     )
 
     LOCAL_LLM_MAX_TOKENS: int = Field(
-        256,
+        128,
         env="LOCAL_LLM_MAX_TOKENS",
-        description="Maximum output tokens per generation",
+        description="Maximum output tokens per generation (128 is safe for meeting Q&A; increase for longer answers)",
     )
 
     LOCAL_LLM_TEMPERATURE: float = Field(
@@ -228,6 +248,53 @@ class Settings(BaseSettings):
         env="DEFAULT_LANGUAGE",
         description="Default language hint for Whisper (e.g., 'en')",
     )
+
+    # =========================================================================
+    # Web Application Configuration
+    # =========================================================================
+    WEB_HOST: str = Field(
+        "0.0.0.0",
+        env="WEB_HOST",
+        description="Host to bind the web server to",
+    )
+
+    WEB_PORT: int = Field(
+        8080,
+        env="WEB_PORT",
+        description="Port to listen on for the web server",
+    )
+
+    WEB_SECRET_KEY: str = Field(
+        "meetbot-change-this-secret-key-in-production",
+        env="WEB_SECRET_KEY",
+        description="Secret key for session encryption (CHANGE IN PRODUCTION)",
+    )
+
+    WEB_STORAGE_SECRET: str = Field(
+        "meetbot-storage-secret-change-me",
+        env="WEB_STORAGE_SECRET",
+        description="Secret key for NiceGUI user storage encryption",
+    )
+
+    MAX_UPLOAD_SIZE_MB: int = Field(
+        500,
+        env="MAX_UPLOAD_SIZE_MB",
+        description="Maximum upload file size in megabytes",
+    )
+
+    ALLOWED_AUDIO_EXTENSIONS: str = Field(
+        ".wav,.mp3,.m4a,.flac,.aac,.ogg,.wma,.opus",
+        env="ALLOWED_AUDIO_EXTENSIONS",
+        description="Comma-separated list of allowed audio file extensions",
+    )
+
+    def get_allowed_extensions(self) -> list[str]:
+        """Get allowed audio extensions as a list."""
+        return [ext.strip().lower() for ext in self.ALLOWED_AUDIO_EXTENSIONS.split(",")]
+
+    def get_max_upload_bytes(self) -> int:
+        """Get maximum upload size in bytes."""
+        return self.MAX_UPLOAD_SIZE_MB * 1024 * 1024
 
     # =========================================================================
     # Pydantic Configuration

@@ -5,9 +5,12 @@ import json
 import logging
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Callable
 
 logger = logging.getLogger(__name__)
+
+# Progress callback type: (stage: str, progress: float 0-100, message: str) -> None
+ProgressCallback = Callable[[str, float, str], None]
 
 
 class IndexerService:
@@ -142,6 +145,8 @@ class IndexerService:
         embedding_model: str = "./models/sarashina-embedding-v1-1b",
         collection_name: Optional[str] = None,
         overwrite: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
+        device: Optional[str] = None,
     ) -> Any:
         """
         Build or load vector index from prepared documents.
@@ -155,6 +160,7 @@ class IndexerService:
             embedding_model: Embedding model name or path
             collection_name: Chroma collection name (defaults to audio basename)
             overwrite: Force rebuild even if index exists
+            progress_callback: Optional callback for progress updates (stage, progress 0-100, message)
 
         Returns:
             Chroma vectorstore or chromadb collection object
@@ -163,6 +169,19 @@ class IndexerService:
             FileNotFoundError: If prepared JSONL not found
             RuntimeError: If index creation fails
         """
+        # Resolve the compute device: explicit param > settings > cpu
+        if device is None:
+            try:
+                from ..config import settings as _cfg
+                device = _cfg.EMBEDDING_DEVICE
+            except Exception:
+                device = "cpu"
+        device = device.lower().strip()
+        logger.info(f"Embedding device: {device}")
+
+        if progress_callback:
+            progress_callback("indexing", 5, "Initializing indexing service...")
+
         prepared_path = Path(prepared_jsonl)
         if not prepared_path.exists():
             raise FileNotFoundError(f"Prepared JSONL not found: {prepared_jsonl}")
@@ -176,24 +195,30 @@ class IndexerService:
 
         resolved_model = self._resolve_model_path(embedding_model)
 
+        if progress_callback:
+            progress_callback("indexing", 10, "Computing document hash...")
         # Compute hash for change detection
         current_hash = self._compute_hash(prepared_path, resolved_model)
 
         # Check if existing index matches
         if not overwrite:
+            if progress_callback:
+                progress_callback("indexing", 15, "Checking for existing index...")
             meta = self._read_metadata(persist_dir)
             if meta and meta.get("hash") == current_hash:
+                if progress_callback:
+                    progress_callback("indexing", 20, "Loading existing index...")
                 logger.info(f"Index exists and matches (hash={current_hash[:8]}...)")
                 logger.info("Loading existing index...")
 
                 # Try LangChain API first
                 try:
                     from langchain_huggingface import HuggingFaceEmbeddings
-                    import torch
+                    import torch  # noqa: F401 (kept for optional GPU flush)
 
-                    # Auto-detect GPU for faster embeddings
-                    device = "cuda" if torch.cuda.is_available() else "cpu"
                     logger.info(f"Using device for embeddings: {device}")
+                    if progress_callback:
+                        progress_callback("indexing", 30, f"Loading embeddings model on {device.upper()}...")
 
                     embedding = HuggingFaceEmbeddings(
                         model_name=resolved_model,
@@ -207,12 +232,16 @@ class IndexerService:
                         from langchain_community.vectorstores import Chroma
                         logger.debug("Using langchain_community.vectorstores (legacy)")
 
+                    if progress_callback:
+                        progress_callback("indexing", 50, "Loading vector database...")
                     vectordb = Chroma(
                         persist_directory=str(persist_dir),
                         embedding_function=embedding,
                         collection_name=collection_name,
                     )
                     logger.info("✓ Loaded existing index via LangChain")
+                    if progress_callback:
+                        progress_callback("indexing", 100, "✓ Index loaded successfully")
                     return vectordb
 
                 except Exception as e:
@@ -222,9 +251,13 @@ class IndexerService:
                 try:
                     import chromadb
 
+                    if progress_callback:
+                        progress_callback("indexing", 50, "Loading vector database (chromadb)...")
                     client = chromadb.PersistentClient(path=str(persist_dir))
                     collection = client.get_collection(collection_name)
                     logger.info("✓ Loaded existing index via chromadb")
+                    if progress_callback:
+                        progress_callback("indexing", 100, "✓ Index loaded successfully")
                     return {"chroma_client": client, "collection": collection}
 
                 except Exception as e:
@@ -232,6 +265,8 @@ class IndexerService:
                     logger.info("Will rebuild index...")
 
         # Load prepared documents
+        if progress_callback:
+            progress_callback("indexing", 20, "Loading prepared documents...")
         logger.info(f"Loading prepared documents: {prepared_path}")
         try:
             docs = self._load_prepared_jsonl(prepared_path)
@@ -244,6 +279,8 @@ class IndexerService:
             raise ValueError("No documents to index")
 
         # Build embeddings using LangChain
+        if progress_callback:
+            progress_callback("indexing", 30, f"Building index with {len(docs)} documents...")
         logger.info(f"Building index with {len(docs)} documents...")
         try:
             from langchain_huggingface import HuggingFaceEmbeddings
@@ -254,10 +291,10 @@ class IndexerService:
             except ImportError:
                 from langchain_community.vectorstores import Chroma
 
-            # Auto-detect GPU for faster embeddings
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
+            import torch  # noqa: F401
             logger.info(f"Using device for embeddings: {device}")
+            if progress_callback:
+                progress_callback("indexing", 40, f"Loading embedding model on {device.upper()}...")
 
             embedding = HuggingFaceEmbeddings(
                 model_name=resolved_model,
@@ -265,12 +302,16 @@ class IndexerService:
             )
 
             # Convert to LangChain Documents
+            if progress_callback:
+                progress_callback("indexing", 50, "Converting documents to LangChain format...")
             lc_docs = [
                 Document(page_content=d["text"], metadata=d["metadata"]) for d in docs
             ]
 
             persist_dir.mkdir(parents=True, exist_ok=True)
 
+            if progress_callback:
+                progress_callback("indexing", 60, f"Creating vector index at {persist_dir}...")
             logger.info(f"Building Chroma index at {persist_dir}...")
             vectordb = Chroma.from_documents(
                 documents=lc_docs,
@@ -286,6 +327,8 @@ class IndexerService:
                 pass  # Not available in new API
 
             # Write metadata
+            if progress_callback:
+                progress_callback("indexing", 85, "Saving index metadata...")
             meta = {
                 "hash": current_hash,
                 "model": resolved_model,
@@ -295,11 +338,15 @@ class IndexerService:
             self._write_metadata(persist_dir, meta)
 
             logger.info(f"✓ Built index with {len(lc_docs)} documents")
+            if progress_callback:
+                progress_callback("indexing", 100, f"✓ Index built successfully ({len(lc_docs)} documents)")
             return vectordb
 
         except Exception as e:
             logger.warning(f"LangChain approach failed: {e}")
             logger.info("Falling back to sentence-transformers + chromadb...")
+            if progress_callback:
+                progress_callback("indexing", 50, "Falling back to sentence-transformers...")
 
             # Fallback: Use sentence-transformers directly
             try:
@@ -308,17 +355,20 @@ class IndexerService:
                 from chromadb import errors as chromadb_errors
                 import torch
 
-                # Auto-detect GPU for faster embeddings
-                device = "cuda" if torch.cuda.is_available() else "cpu"
                 logger.info(f"Using device for embeddings: {device}")
+                if progress_callback:
+                    progress_callback("indexing", 60, f"Loading embedding model on {device.upper()}...")
 
                 sbert = SentenceTransformer(resolved_model, device=device)
 
                 texts = [d["text"] for d in docs]
+                if progress_callback:
+                    progress_callback("indexing", 70, f"Computing embeddings for {len(texts)} documents...")
                 logger.info(f"Computing embeddings for {len(texts)} documents...")
 
-                # Batch processing for faster embeddings (especially on GPU)
-                batch_size = 128 if device == "cuda" else 32
+                # Small batch size prevents OOM on low-VRAM GPUs; use even
+                # smaller batches on cpu to keep memory pressure low.
+                batch_size = 8 if device == "cuda" else 16
                 embeddings = sbert.encode(
                     texts,
                     batch_size=batch_size,

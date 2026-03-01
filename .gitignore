@@ -172,3 +172,22 @@ site/
 .project
 .settings
 
+
+# ============================================================================
+# Project-specific additions
+# ============================================================================
+# Allow .env.example template in the repo
+!.env.example
+
+# Hypothesis testing artefacts
+.hypothesis/
+
+# mypy cache
+.mypy_cache/
+.dmypy.json
+
+# tox
+.tox/
+
+# Ruff cache
+.ruff_cache/

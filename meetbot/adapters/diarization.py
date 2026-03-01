@@ -40,6 +40,7 @@ class LocalPyannoteAdapter:
         """
         try:
             import torch
+            import torchaudio
             from pyannote.audio import Pipeline
 
             logger.info(f"Diarizing {Path(audio_path).name} using local Pyannote...")
@@ -57,10 +58,38 @@ class LocalPyannoteAdapter:
                 self.pipeline.to(torch.device(device))
                 logger.info("✓ Pyannote model loaded")
 
+            # ── Pre-load and resample to 16 kHz ──────────────────────────────
+            # Passing the file path directly to pyannote can produce mismatched
+            # chunk sizes when the source sample rate is not 16000 Hz (e.g. M4A
+            # files are often 44100 Hz). Pyannote's embedder expects exactly
+            # 160000 samples (10 s × 16000 Hz) per chunk; a foreign sample rate
+            # yields differently-sized chunks that torch.vstack() refuses to
+            # stack, raising the "Sizes of tensors must match" error.
+            # Solution: load → resample → pass as a {"waveform", "sample_rate"}
+            # dict so pyannote works entirely in 16000 Hz space.
+            TARGET_SR = 16_000
+            waveform, orig_sr = torchaudio.load(audio_path)
+
+            if waveform.shape[0] > 1:
+                # Mix down to mono
+                waveform = waveform.mean(dim=0, keepdim=True)
+
+            if orig_sr != TARGET_SR:
+                logger.info(
+                    f"Resampling audio from {orig_sr} Hz → {TARGET_SR} Hz "
+                    "for Pyannote compatibility"
+                )
+                resampler = torchaudio.transforms.Resample(
+                    orig_freq=orig_sr, new_freq=TARGET_SR
+                )
+                waveform = resampler(waveform)
+
+            audio_input = {"waveform": waveform, "sample_rate": TARGET_SR}
+
             # Run diarization
-            logger.info(f"Running diarization inference...")
+            logger.info("Running diarization inference...")
             diarization = self.pipeline(
-                audio_path,
+                audio_input,
                 min_speakers=min_speakers,
                 max_speakers=max_speakers,
             )

@@ -8,9 +8,12 @@ with caching and normalization.
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Any, Dict, List
+from typing import Optional, Any, Dict, List, Callable
 
 logger = logging.getLogger(__name__)
+
+# Progress callback type: (stage: str, progress: float 0-100, message: str) -> None
+ProgressCallback = Callable[[str, float, str], None]
 
 
 class TranscriberService:
@@ -38,6 +41,7 @@ class TranscriberService:
         language: Optional[str] = None,
         use_cache: bool = True,
         force_refresh: bool = False,
+        progress_callback: Optional[ProgressCallback] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
@@ -51,6 +55,7 @@ class TranscriberService:
             language: Language hint for Whisper
             use_cache: Whether to use cache
             force_refresh: Force fresh transcription
+            progress_callback: Optional callback for progress updates (stage, progress 0-100, message)
             **kwargs: Additional parameters
 
         Returns:
@@ -67,6 +72,9 @@ class TranscriberService:
             from ..adapters.transcribers import get_transcriber
             self.transcriber = get_transcriber()
 
+        if progress_callback:
+            progress_callback("transcription", 5, "Initializing transcription service...")
+
         model_name = settings.WHISPER_MODEL
         params = {}
         if language:
@@ -78,10 +86,14 @@ class TranscriberService:
         from_cache = False
 
         if use_cache and not force_refresh:
+            if progress_callback:
+                progress_callback("transcription", 10, "Checking cache...")
             raw = load_from_cache(model_name, audio_path, extra=params)
             if raw is not None:
                 cache_path = cache_path_for(model_name, audio_path, extra=params)
                 from_cache = True
+                if progress_callback:
+                    progress_callback("transcription", 100, "✓ Loaded from cache")
                 logger.info(f"Loaded transcription from cache: {cache_path}")
 
         # Transcribe if not cached
@@ -89,9 +101,13 @@ class TranscriberService:
             logger.info("Calling transcriber backend...")
             try:
                 # 1. Convert to WAV first
+                if progress_callback:
+                    progress_callback("transcription", 15, "Converting audio to WAV format...")
                 wav_path = convert_to_wav(audio_path, output_dir="temp")
 
                 # 2. Check file size to determine if chunking is needed
+                if progress_callback:
+                    progress_callback("transcription", 20, "Analyzing audio file...")
                 wav_size = Path(wav_path).stat().st_size
                 should_chunk = (
                     settings.AUDIO_CHUNK_ENABLE
@@ -103,23 +119,35 @@ class TranscriberService:
                         f"File size {wav_size / 1024 / 1024:.1f} MB exceeds threshold "
                         f"({settings.AUDIO_CHUNK_SIZE_BYTES / 1024 / 1024:.1f} MB). Using chunking strategy."
                     )
+                    if progress_callback:
+                        progress_callback("transcription", 25, f"File size: {wav_size / 1024 / 1024:.1f} MB - using chunking strategy...")
                     raw = self._transcribe_with_chunking(
-                        wav_path, language=language, **kwargs
+                        wav_path, language=language, progress_callback=progress_callback, **kwargs
                     )
                 else:
                     # Direct transcription for small files
                     logger.info(f"File size {wav_size / 1024 / 1024:.1f} MB. Using direct transcription.")
+                    if progress_callback:
+                        progress_callback("transcription", 30, f"Transcribing audio (size: {wav_size / 1024 / 1024:.1f} MB)...")
                     raw = self.transcriber.transcribe(wav_path, language=language, **kwargs)
+                    if progress_callback:
+                        progress_callback("transcription", 80, "Transcription complete")
 
             except Exception as e:
                 logger.error(f"Transcription failed: {e}")
+                if progress_callback:
+                    progress_callback("transcription", 0, f"✗ Error: {str(e)}")
                 raise
 
             if use_cache:
+                if progress_callback:
+                    progress_callback("transcription", 85, "Caching results...")
                 cache_path = save_to_cache(model_name, audio_path, raw, extra=params)
                 logger.info(f"Cached transcription: {cache_path}")
 
         # Normalize segments format
+        if progress_callback:
+            progress_callback("transcription", 90, "Normalizing transcript format...")
         segments = []
         if isinstance(raw, dict) and "chunks" in raw:
             for c in raw["chunks"]:
@@ -137,6 +165,9 @@ class TranscriberService:
         elif isinstance(raw, dict) and "segments" in raw:
             segments = raw["segments"]
 
+        if progress_callback:
+            progress_callback("transcription", 100, f"✓ Transcription complete ({len(segments)} segments)")
+
         return {
             "raw": raw,
             "segments": segments,
@@ -148,6 +179,7 @@ class TranscriberService:
         self,
         wav_path: str,
         language: Optional[str] = None,
+        progress_callback: Optional[ProgressCallback] = None,
         **kwargs: Any,
     ) -> Dict[str, Any]:
         """
@@ -159,6 +191,7 @@ class TranscriberService:
         Args:
             wav_path: Path to WAV file (already converted)
             language: Language hint
+            progress_callback: Optional callback for progress updates
             **kwargs: Additional transcription parameters
 
         Returns:
@@ -172,6 +205,8 @@ class TranscriberService:
         from ..config import settings
 
         # 1. Chunk the audio
+        if progress_callback:
+            progress_callback("transcription", 30, "Chunking large audio file...")
         logger.info("Chunking audio file for transcription...")
         chunks = chunk_audio_for_transcription(
             wav_path,
@@ -181,13 +216,19 @@ class TranscriberService:
             use_silence_detection=settings.AUDIO_CHUNK_USE_SILENCE_DETECTION,
         )
 
+        if progress_callback:
+            progress_callback("transcription", 35, f"Created {len(chunks)} chunks - starting transcription...")
+
         # 2. Transcribe each chunk
         logger.info(f"Transcribing {len(chunks)} chunks...")
         chunk_results = []
-        for chunk in chunks:
+        for i, chunk in enumerate(chunks):
             logger.info(
                 f"  Chunk {chunk['index']}: {chunk['start']:.1f}s - {chunk['end']:.1f}s"
             )
+            if progress_callback:
+                chunk_progress = 35 + (50 * (i / len(chunks)))  # 35-85%
+                progress_callback("transcription", chunk_progress, f"Transcribing chunk {i +1}/{len(chunks)}...")
             try:
                 raw_chunk = self.transcriber.transcribe(
                     chunk["chunk_path"], language=language, **kwargs
@@ -211,6 +252,8 @@ class TranscriberService:
                 raise
 
         # 3. Stitch results together
+        if progress_callback:
+            progress_callback("transcription", 85, "Stitching chunk results...")
         logger.info("Stitching chunk results...")
         stitched = stitch_chunk_results_to_json(chunk_results)
         logger.info(

@@ -1,0 +1,55 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environment
+venv/
+.venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Git
+.git
+.gitignore
+
+# Cache and temp
+.cache_hf/
+*.cache
+temp/
+
+# Documentation (not needed in container)
+*.md
+!README.md
+docs/
+
+# Tests (not needed in container)
+tests/
+
+# Large model files (mounted as volumes)
+models/
+
+# Existing results/data (mounted as volumes)
+data/
+results/
+db/
+prepared/
+
+# Environment files
+.env
+.env.*

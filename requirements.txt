@@ -14,6 +14,13 @@ requests>=2.28                # HTTP client library
 tqdm>=4.65                    # Progress bars
 toolz>=0.12.0                 # Functional programming utilities
 
+# ============================================================================
+# Web Application
+# ============================================================================
+nicegui>=2.0.0                # Python-based web UI framework (includes FastAPI + Uvicorn)
+sqlalchemy>=2.0               # ORM for SQLite database
+bcrypt>=4.0                   # Password hashing
+
 
 # ============================================================================
 # Audio Processing & Transcription
@@ -91,11 +98,8 @@ llama-cpp-python>=0.2.0
 # ============================================================================
 # Optional: Development & Testing
 # ============================================================================
-# Uncomment for development work
-# pytest>=7.2.0                # Testing framework
-# pytest-asyncio>=0.20.0       # Async test support
-# black>=23.0.0                # Code formatter
-# ruff>=0.1.0                  # Python linter
+pytest>=7.2.0                 # Testing framework
+pytest-asyncio>=0.20.0        # Async test support
 
 
 # ============================================================================

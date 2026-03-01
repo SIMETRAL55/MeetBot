@@ -216,6 +216,70 @@ def cmd_query(args):
         sys.exit(1)
 
 
+def cmd_create_user(args):
+    """Create a new user for the web application."""
+    setup_logging(level=args.log_level)
+    logger = logging.getLogger(__name__)
+
+    try:
+        from .db.database import init_db, get_session
+        from .db.crud import create_user, get_user_by_username
+        from .web.auth import hash_password
+
+        init_db()
+        SessionLocal = get_session()
+        db = SessionLocal()
+
+        try:
+            existing = get_user_by_username(db, args.username)
+            if existing:
+                print(f"Error: User '{args.username}' already exists.")
+                sys.exit(1)
+
+            password = args.password
+            if not password:
+                import getpass
+                password = getpass.getpass("Password: ")
+                confirm = getpass.getpass("Confirm password: ")
+                if password != confirm:
+                    print("Error: Passwords do not match.")
+                    sys.exit(1)
+
+            hashed = hash_password(password)
+            user = create_user(
+                db,
+                username=args.username,
+                password_hash=hashed,
+                display_name=args.display_name,
+                is_admin=args.admin,
+            )
+            print(f"✓ User '{user.username}' created successfully (admin={user.is_admin})")
+        finally:
+            db.close()
+
+    except Exception as e:
+        logger.error(f"Failed to create user: {e}", exc_info=True)
+        sys.exit(1)
+
+
+def cmd_serve(args):
+    """Start the MeetBot web application."""
+    setup_logging(level=args.log_level)
+    logger = logging.getLogger(__name__)
+
+    logger.info("Starting MeetBot web application...")
+    try:
+        from .web.main import start_server
+        start_server(
+            host=args.host,
+            port=args.port,
+            reload=args.reload,
+        )
+    except Exception as e:
+        logger.error(f"Server failed: {e}", exc_info=True)
+        sys.exit(1)
+
+
 def main():
     """Main CLI entry point with subcommands."""
     parser = argparse.ArgumentParser(
@@ -260,6 +324,23 @@ def main():
     query_parser.add_argument("--use-local-llm", action="store_true", help="Use local LLM if available")
     query_parser.add_argument("--log-level", default="INFO")
     query_parser.set_defaults(func=cmd_query)
+
+    # Create user command
+    user_parser = subparsers.add_parser("create-user", help="Create a new web application user")
+    user_parser.add_argument("username", help="Username for the new user")
+    user_parser.add_argument("--password", default=None, help="Password (prompted if not provided)")
+    user_parser.add_argument("--display-name", default=None, help="Display name")
+    user_parser.add_argument("--admin", action="store_true", help="Grant admin privileges")
+    user_parser.add_argument("--log-level", default="INFO")
+    user_parser.set_defaults(func=cmd_create_user)
+
+    # Serve command (start web application)
+    serve_parser = subparsers.add_parser("serve", help="Start the MeetBot web application")
+    serve_parser.add_argument("--host", default="0.0.0.0", help="Host to bind to")
+    serve_parser.add_argument("--port", type=int, default=8080, help="Port to listen on")
+    serve_parser.add_argument("--reload", action="store_true", help="Enable auto-reload for development")
+    serve_parser.add_argument("--log-level", default="INFO")
+    serve_parser.set_defaults(func=cmd_serve)
 
     args = parser.parse_args()
 

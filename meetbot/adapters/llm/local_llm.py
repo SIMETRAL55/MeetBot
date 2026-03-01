@@ -6,7 +6,7 @@ Supports GPU acceleration with memory management optimized for consumer GPUs (4-
 
 Example:
     >>> from adapters.llm import LocalLLMAdapter
-    >>> llm = LocalLLMAdapter(model_path="./rakutenai-7b-instruct-gguf")
+    >>> llm = LocalLLMAdapter(model_path="./models/rakutenai-7b-instruct-gguf")
     >>> response = llm.generate("What is Python?", max_tokens=256)
 """
 
@@ -36,16 +36,63 @@ except ImportError:
 # Constants
 # ============================================================================
 
-DEFAULT_MODEL_DIR = "./rakutenai-7b-instruct-gguf"
+DEFAULT_MODEL_DIR = "./models/rakutenai-7b-instruct-gguf"
 DEFAULT_MODEL_FILENAME = "RakutenAI-7B-q3_K_M.gguf"
 FALLBACK_MODEL_PATTERNS = ["*.gguf", "model.gguf", "*q4*.gguf", "*4bit*.gguf"]
 
 # GPU memory management
-DEFAULT_N_GPU_LAYERS = 20  # Aggressive GPU usage for RTX 3050
-DEFAULT_CONTEXT_SIZE = 2048  # Safe context window for Q4_K_M quantization
-DEFAULT_MAX_TOKENS = 256  # Max output tokens per generation
+# Default to 0 GPU layers (full CPU) because at query time the GPU is often
+# partially occupied by Pyannote/Whisper residuals (~3.5 GiB on a 3.68 GiB
+# card).  Set LOCAL_LLM_GPU_LAYERS=8 (or higher) in .env once you confirm
+# there is enough free VRAM after embedding inference.
+DEFAULT_N_GPU_LAYERS = 0
+DEFAULT_CONTEXT_SIZE = 2048  # Safe context window for Q3_K_M quantization
+DEFAULT_MAX_TOKENS = 128   # Reduced: enough for meeting summaries, faster
 DEFAULT_TEMPERATURE = 0.7
 DEFAULT_TOP_P = 0.9
+# Number of CPU threads for llama_cpp token generation.
+# Avoid using all cores so the event loop stays responsive.
+DEFAULT_N_THREADS = 4
+
+
+# ============================================================================
+# VRAM safety helper
+# ============================================================================
+
+
+def _get_safe_gpu_layers(requested: int) -> int:
+    """
+    Return a safe n_gpu_layers value based on currently available VRAM.
+
+    If less than 1 GiB of VRAM is free we fall back to CPU-only inference
+    (n_gpu_layers=0) to prevent llama_cpp from entering an internal OOM stall
+    loop that never returns.
+
+    Args:
+        requested: Desired number of GPU layers from config.
+
+    Returns:
+        0 if insufficient VRAM, otherwise *requested*.
+    """
+    if requested == 0:
+        return 0
+    if torch is None or not torch.cuda.is_available():
+        return 0
+    try:
+        free_bytes, _ = torch.cuda.mem_get_info()
+        free_gib = free_bytes / (1024 ** 3)
+        if free_gib < 1.0:
+            logger.warning(
+                "Only %.2f GiB VRAM free — forcing CPU inference (n_gpu_layers=0). "
+                "Set LOCAL_LLM_GPU_LAYERS=0 to suppress this warning.",
+                free_gib,
+            )
+            return 0
+        logger.info("%.2f GiB VRAM free — using %d GPU layers", free_gib, requested)
+    except Exception as exc:
+        logger.debug("Could not query VRAM: %s — using CPU", exc)
+        return 0
+    return requested
 
 
 # ============================================================================
@@ -192,10 +239,17 @@ class LocalLLMManager:
                     gpu_layers,
                 )
 
+                safe_gpu_layers = _get_safe_gpu_layers(gpu_layers)
+                if safe_gpu_layers != gpu_layers:
+                    logger.warning(
+                        "VRAM check reduced gpu_layers %d → %d for this run",
+                        gpu_layers, safe_gpu_layers,
+                    )
                 self._model = Llama(
                     model_path=str(self.model_path),
-                    n_gpu_layers=gpu_layers,
+                    n_gpu_layers=safe_gpu_layers,
                     n_ctx=self.n_ctx,
+                    n_threads=DEFAULT_N_THREADS,
                     verbose=False,
                 )
 
@@ -281,7 +335,7 @@ class LocalLLMAdapter(BaseLLM):
         top_p: Nucleus sampling parameter
 
     Example:
-        >>> llm = LocalLLMAdapter(model_path="./rakutenai-7b-instruct-gguf")
+        >>> llm = LocalLLMAdapter(model_path="./models/rakutenai-7b-instruct-gguf")
         >>> response = llm.generate("What is machine learning?")
         >>> llm.close()  # Clean up resources
     """
@@ -390,6 +444,58 @@ class LocalLLMAdapter(BaseLLM):
 
         finally:
             # Clean CUDA memory between calls
+            if torch is not None and torch.cuda.is_available():
+                torch.cuda.empty_cache()
+
+    def generate_stream(
+        self,
+        prompt: str,
+        max_tokens: Optional[int] = None,
+        temperature: Optional[float] = None,
+        top_p: Optional[float] = None,
+        stop: Optional[List[str]] = None,
+        **kwargs: Any,
+    ):
+        """
+        Stream response tokens from the GGUF model one-by-one.
+
+        Uses llama_cpp's native ``stream=True`` which yields token dicts of the
+        form ``{"choices": [{"text": "..."}]}``.
+
+        This method is a **synchronous generator** — run it in a background
+        thread (e.g. via ``asyncio.to_thread``) to keep the event loop free.
+
+        Yields:
+            str: individual token strings (may be empty strings for some tokens)
+        """
+        manager = self._ensure_manager()
+        model = manager.load_model()
+
+        max_tokens = max_tokens or self.max_tokens
+        temperature = temperature if temperature is not None else self.temperature
+        top_p = top_p if top_p is not None else self.top_p
+
+        try:
+            logger.info("Starting streaming generation (max_tokens=%d)...", max_tokens)
+            for chunk in model(
+                prompt,
+                max_tokens=max_tokens,
+                temperature=temperature,
+                top_p=top_p,
+                echo=False,
+                stream=True,
+            ):
+                if isinstance(chunk, dict) and "choices" in chunk:
+                    token_text = chunk["choices"][0].get("text", "")
+                else:
+                    token_text = str(chunk)
+                if token_text:
+                    yield token_text
+
+        except Exception as e:
+            logger.error("Streaming inference failed: %s", e)
+            raise RuntimeError(f"Local LLM streaming failed: {e}") from e
+        finally:
             if torch is not None and torch.cuda.is_available():
                 torch.cuda.empty_cache()
 

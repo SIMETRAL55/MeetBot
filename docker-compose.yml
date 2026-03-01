@@ -1,0 +1,52 @@
+# =============================================================================
+# MeetBot — Docker Compose Configuration
+#
+# Single-service deployment with GPU access and persistent storage.
+# =============================================================================
+
+services:
+  meetbot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: meetbot-app
+    ports:
+      - "${WEB_PORT:-8080}:8080"
+    volumes:
+      # Persistent data
+      - ./data:/app/data                    # Upload files
+      - ./results:/app/results              # Pipeline output
+      - ./db:/app/db                        # ChromaDB vector stores
+      - ./prepared:/app/prepared            # Prepared documents
+      - ./.cache_hf:/app/.cache_hf          # Model cache
+      # Local models (must exist on host)
+      - ./models:/app/models:ro             # Read-only model files
+      # SQLite database
+      - meetbot-db:/app/meetbot.db.d
+    environment:
+      - WEB_HOST=0.0.0.0
+      - WEB_PORT=8080
+      - WEB_SECRET_KEY=${WEB_SECRET_KEY:-change-this-in-production}
+      - WEB_STORAGE_SECRET=${WEB_STORAGE_SECRET:-change-this-storage-secret}
+      - TRANSCRIPTION_BACKEND=local
+      - USE_LOCAL_LLM=true
+      - DEVICE=cuda
+      - EMBEDDING_MODEL=/app/models/sarashina-embedding-v1-1b
+      - LOCAL_LLM_MODEL_PATH=/app/models/rakutenai-7b-instruct-gguf
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "3"
+
+volumes:
+  meetbot-db:
+    driver: local
