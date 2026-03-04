@@ -33,6 +33,68 @@ ProgressCallback = Callable[[str, float, str], None]
 # ---------------------------------------------------------------------------
 _hf_adapter_cache: Optional[Any] = None
 
+# ---------------------------------------------------------------------------
+# Embedding model singleton — keyed by (model_name, device).
+#
+# Root-cause prevention: both _load_vectorstore (retrieval) and
+# _filter_sources_by_answer_similarity (post-answer filtering) use the same
+# HuggingFaceEmbeddings wrapper.  Without a cache, every call to
+# HuggingFaceEmbeddings(model_name=...) triggers a SentenceTransformer
+# instantiation, doubling peak RAM and causing OOM on low-memory hosts.
+#
+# The cache is a simple dict keyed by (model_name, device) so different
+# models are each cached independently.  All access is protected by a lock
+# so concurrent threads cannot race on initialisation.
+# ---------------------------------------------------------------------------
+_embedding_cache: Dict[Tuple[str, str], Any] = {}
+_embedding_cache_lock = threading.Lock()
+
+
+def _get_embedding_model(model_name: str, device: str = "cpu") -> Any:
+    """Return a cached ``HuggingFaceEmbeddings`` instance.
+
+    The model is loaded at most once per (model_name, device) pair per
+    process life-time.  Subsequent calls return the cached instance immediately
+    without touching the filesystem or GPU.
+
+    Args:
+        model_name: HuggingFace model ID or local directory path.
+        device: Compute device ("cpu" or "cuda").
+
+    Returns:
+        HuggingFaceEmbeddings instance ready for embed_documents / embed_query.
+    """
+    cache_key = (model_name, device)
+    # Fast path — no lock needed for read when key is already present because
+    # dict reads are atomic in CPython.
+    if cache_key in _embedding_cache:
+        logger.debug(
+            "Using embedding model from cache (model=%s, device=%s)",
+            model_name, device,
+        )
+        return _embedding_cache[cache_key]
+
+    with _embedding_cache_lock:
+        # Re-check inside lock in case another thread loaded it while we waited.
+        if cache_key in _embedding_cache:
+            return _embedding_cache[cache_key]
+
+        logger.info(
+            "Initialising embedding model (model=%s, device=%s) — first load",
+            model_name, device,
+        )
+        from langchain_huggingface import HuggingFaceEmbeddings
+        embedder = HuggingFaceEmbeddings(
+            model_name=model_name,
+            model_kwargs={"device": device},
+        )
+        _embedding_cache[cache_key] = embedder
+        logger.info(
+            "Embedding model ready and cached (model=%s, device=%s)",
+            model_name, device,
+        )
+        return embedder
+
 
 def _invalidate_chroma_cache(job_id: str) -> None:
     """Clear chromadb's process-level SharedSystemClient registry.
@@ -147,18 +209,14 @@ class QueryService:
 
         # Try LangChain API
         try:
-            from langchain_huggingface import HuggingFaceEmbeddings
-
             try:
                 from langchain_chroma import Chroma
             except ImportError:
                 from langchain_community.vectorstores import Chroma
 
             logger.debug("Loading vectorstore via LangChain...")
-            embedding = HuggingFaceEmbeddings(
-                model_name=embedding_model,
-                model_kwargs={"device": "cpu"},
-            )
+            # Reuse the singleton — never reload SentenceTransformer here.
+            embedding = _get_embedding_model(embedding_model, device="cpu")
             vectordb = Chroma(
                 persist_directory=db_dir,
                 embedding_function=embedding,
@@ -183,6 +241,238 @@ class QueryService:
         except Exception as e:
             logger.error(f"Failed to load vectorstore: {e}")
             raise RuntimeError(f"Could not load vectorstore from {db_dir}: {e}") from e
+
+    @staticmethod
+    def _retrieve_with_scores(
+        vectorstore: Any, question: str, k: int = 4
+    ) -> List[Tuple[Any, float]]:
+        """Retrieve the top-k relevant documents together with their similarity scores.
+
+        Returns a list of ``(document, score)`` tuples where **lower score means
+        more similar** (raw chromadb / LangChain Chroma distance).  When the
+        underlying store cannot supply scores the score is set to ``-1.0``.
+
+        Args:
+            vectorstore: Chroma vectorstore (LangChain or chromadb direct dict).
+            question: User query string.
+            k: Number of documents to retrieve.
+
+        Returns:
+            List of (document, float) tuples, length ≤ k.
+        """
+        # ── LangChain Chroma — preferred path ─────────────────────────────
+        if hasattr(vectorstore, "similarity_search_with_score"):
+            try:
+                return vectorstore.similarity_search_with_score(question, k=k)
+            except Exception as exc:
+                logger.warning("similarity_search_with_score failed: %s", exc)
+
+        if hasattr(vectorstore, "similarity_search"):
+            try:
+                docs = vectorstore.similarity_search(question, k=k)
+                return [(d, -1.0) for d in docs]
+            except Exception as exc:
+                logger.warning("similarity_search fallback failed: %s", exc)
+
+        # ── chromadb direct dict ──────────────────────────────────────────
+        if isinstance(vectorstore, dict) and "collection" in vectorstore:
+            collection = vectorstore["collection"]
+            try:
+                results = collection.query(
+                    query_texts=[question],
+                    n_results=k,
+                    include=["documents", "metadatas", "distances"],
+                )
+            except Exception as exc:
+                logger.warning("chromadb query failed: %s", exc)
+                return []
+
+            out: List[Tuple[Any, float]] = []
+            for i, text in enumerate(results.get("documents", [[]])[0]):
+                meta = (
+                    results["metadatas"][0][i]
+                    if results.get("metadatas") and i < len(results["metadatas"][0])
+                    else {}
+                )
+                dist = (
+                    float(results["distances"][0][i])
+                    if results.get("distances") and i < len(results["distances"][0])
+                    else -1.0
+                )
+                doc = type("Document", (), {"page_content": text, "metadata": meta})()
+                out.append((doc, dist))
+            return out
+
+        logger.error("_retrieve_with_scores: unsupported vectorstore type %s", type(vectorstore))
+        return []
+
+    @staticmethod
+    def count_documents(db_dir: str) -> int:
+        """Return the total number of documents stored in the Chroma collection.
+
+        Uses the lightweight chromadb direct API so the full embedding model is
+        never loaded just for a count.  Falls back to 0 on any error.
+
+        Args:
+            db_dir: Path to the ChromaDB persist directory (same as ``job.db_dir``).
+
+        Returns:
+            Non-negative integer document count (0 if db unavailable).
+        """
+        from pathlib import Path
+
+        db_path = Path(db_dir)
+        if not db_path.exists():
+            return 0
+        try:
+            import chromadb
+            client = chromadb.PersistentClient(path=str(db_path))
+            collection = client.get_collection(db_path.name)
+            count = collection.count()
+            logger.debug("count_documents(%s) = %d", db_path.name, count)
+            return count
+        except Exception as exc:
+            logger.warning("count_documents failed for %s: %s", db_dir, exc)
+            return 0
+
+    @staticmethod
+    def _filter_sources_by_answer_similarity(
+        answer_text: str,
+        candidates: List[Dict[str, Any]],
+        embedding_model: str,
+        threshold: float = 0.30,
+        max_return: int = 5,
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Filter candidate sources to those whose text is similar to the answer.
+
+        Embeds the generated answer and all candidate document texts in a single
+        batched call, then computes cosine similarity for each pair.  Only
+        candidates whose similarity exceeds ``threshold`` are returned, up to
+        ``max_return``.  If no candidate passes the threshold, the single
+        highest-similarity candidate is kept as a fallback so the response is
+        never completely source-free.
+
+        This computation runs in the same background thread as ``query_stream``
+        (after all tokens are emitted) so it never delays streaming.
+
+        Args:
+            answer_text: The fully accumulated LLM answer.
+            candidates: List of source dicts as built by ``query_stream`` step 2.
+                        Each dict must contain a ``"text"`` key.
+            embedding_model: HF model name / path used for retrieval (reused here
+                             so the cached model instance is reused as well).
+            threshold: Minimum cosine similarity to include a source (0–1).
+            max_return: Cap on the number of returned sources.
+
+        Returns:
+            ``(filtered_sources, filtering_available)``
+
+            * ``filtered_sources`` — list of source dicts, each enriched with an
+              ``"answer_relevance_pct"`` key (0–100 int).
+            * ``filtering_available`` — ``False`` when embedding computation
+              failed; in that case the original ``candidates`` list is returned
+              unchanged so the UI can show a fallback notice.
+        """
+        if not answer_text.strip() or not candidates:
+            return candidates, True
+
+        try:
+            import numpy as np
+
+            # Use the process-level singleton — zero model reload overhead.
+            logger.info(
+                "Computing answer embedding (model=%s, batch_size=%d)",
+                embedding_model,
+                1 + len(candidates),
+            )
+            embedder = _get_embedding_model(embedding_model, device="cpu")
+
+            # Single batched embed call: answer first, then one doc per candidate.
+            texts = [answer_text] + [c.get("text", "") for c in candidates]
+            logger.debug(
+                "_filter_sources: embedding %d texts (1 answer + %d candidates)",
+                len(texts),
+                len(candidates),
+            )
+            all_embeddings = embedder.embed_documents(texts)
+
+            answer_emb = np.array(all_embeddings[0], dtype=np.float32)
+            a_norm = float(np.linalg.norm(answer_emb))
+            if a_norm > 1e-9:
+                answer_emb /= a_norm
+
+            scored: List[Tuple[float, Dict[str, Any]]] = []
+            for i, cand in enumerate(candidates):
+                doc_emb = np.array(all_embeddings[i + 1], dtype=np.float32)
+                d_norm = float(np.linalg.norm(doc_emb))
+                if d_norm > 1e-9:
+                    doc_emb /= d_norm
+                sim = float(np.dot(answer_emb, doc_emb))
+                scored.append((sim, cand))
+                logger.debug(
+                    "_filter_sources: candidate %d sim=%.4f  speaker=%s  start=%s",
+                    i,
+                    sim,
+                    cand.get("speaker", "?"),
+                    cand.get("start", "?"),
+                )
+
+            # Sort descending by similarity
+            scored.sort(key=lambda x: x[0], reverse=True)
+            logger.info(
+                "_filter_sources: answer similarity scores: %s",
+                [round(s, 3) for s, _ in scored],
+            )
+
+            filtered = [
+                {**cand, "answer_relevance_pct": max(0, round(sim * 100))}
+                for sim, cand in scored
+                if sim >= threshold
+            ][:max_return]
+
+            # Always return at least one source
+            if not filtered and scored:
+                best_sim, best_cand = scored[0]
+                filtered = [{**best_cand, "answer_relevance_pct": max(0, round(best_sim * 100))}]
+                logger.info(
+                    "_filter_sources: no candidate above threshold %.2f; "
+                    "keeping best (sim=%.3f)",
+                    threshold,
+                    best_sim,
+                )
+            else:
+                logger.info(
+                    "_filter_sources: %d/%d candidates selected (threshold=%.2f)",
+                    len(filtered),
+                    len(candidates),
+                    threshold,
+                )
+
+            return filtered, True
+
+        except Exception as exc:
+            logger.warning(
+                "_filter_sources_by_answer_similarity failed (%s): "
+                "returning all %d candidates unfiltered",
+                exc,
+                len(candidates),
+            )
+            return candidates, False
+
+    @staticmethod
+    def _score_to_relevance_pct(score: float) -> Optional[int]:
+        """Convert a raw distance/score to a 0-100 relevance percentage.
+
+        LangChain's Chroma returns cosine distances in [0, 2] (0 = identical).
+        Chromadb direct returns L2 or cosine distances; values vary.
+
+        We use ``round(max(0, 1 - score) * 100)`` which works perfectly for
+        cosine distance in [0, 1] and gracefully degrades for other metrics
+        (values above 1 clamp to 0 %).  A score of -1.0 (unknown) returns None.
+        """
+        if score < 0:
+            return None
+        return max(0, round((1.0 - score) * 100))
 
     @staticmethod
     def _create_retriever(vectorstore: Any, k: int = 4) -> Any:
@@ -678,34 +968,44 @@ class QueryService:
         try:
             logger.info("query_stream: loading vectorstore from %s", db_dir)
             vectorstore = self._load_vectorstore(db_dir, embedding_model)
-            retriever   = self._create_retriever(vectorstore, k=k)
-            docs        = retriever.retrieve(question)
+            docs_with_scores = self._retrieve_with_scores(vectorstore, question, k=k)
         except Exception as exc:
             logger.error("query_stream retrieval failed: %s", exc)
             yield {"type": "error", "data": f"Retrieval failed: {exc}"}
             return
 
         # ── Step 2: Process documents & build context ──────────────────────
+        # docs_with_scores is List[(document, raw_distance)]; lower = better.
         context: List[Tuple[str, Dict[str, Any]]] = []
-        for doc in docs:
+        raw_scores: List[float] = []
+        for doc, score in docs_with_scores:
             text     = getattr(doc, "page_content", doc)
             metadata = getattr(doc, "metadata", {})
             context.append((text, metadata))
+            raw_scores.append(score)
 
-        sources = [
+        logger.info(
+            "query_stream: retrieved %d candidates, raw scores: %s",
+            len(context),
+            [round(s, 4) for s in raw_scores],
+        )
+
+        # All k candidates as dicts — full text, metadata, retrieval score.
+        candidate_sources = [
             {
-                "text":       text[:200],
-                "audio_file": m.get("audio_file"),
-                "speaker":    m.get("speaker"),
-                "start":      m.get("start"),
-                "end":        m.get("end"),
+                "text":          text,
+                "audio_file":    m.get("audio_file"),
+                "speaker":       m.get("speaker"),
+                "start":         m.get("start"),
+                "end":           m.get("end"),
+                "relevance_pct": self._score_to_relevance_pct(raw_scores[i]),
             }
-            for text, m in context
+            for i, (text, m) in enumerate(context)
         ]
 
-        # Emit sources immediately — client shows them before generation starts
-        yield {"type": "sources", "data": sources}
-        logger.info("query_stream: emitted %d sources", len(sources))
+        # Emit candidates immediately so the UI can show them while streaming.
+        yield {"type": "sources", "data": candidate_sources}
+        logger.info("query_stream: emitted %d candidate sources", len(candidate_sources))
 
         # ── Step 3: Build prompt ───────────────────────────────────────────
         context_text = "\n\n---\n\n".join(
@@ -764,4 +1064,31 @@ class QueryService:
             yield {"type": "error", "data": f"Generation failed: {exc}"}
             return
 
-        yield {"type": "done", "llm_backend": llm_mode, "full_answer": full_answer, "stopped": stopped}
+        # ── Step 5: Post-answer source filtering ──────────────────────────
+        # Compute answer-embedding similarity against candidates so only
+        # genuinely relevant chunks are surfaced to the user.  Runs in the
+        # same background thread (after all tokens are streamed) so it never
+        # delays the streaming UX.
+        answer_for_filter = full_answer.strip() if not stopped else full_answer[:1000].strip()
+        filtered_sources, filtering_ok = self._filter_sources_by_answer_similarity(
+            answer_text=answer_for_filter,
+            candidates=candidate_sources,
+            embedding_model=embedding_model,
+            threshold=_s.SOURCE_SIM_THRESHOLD,
+            max_return=_s.SOURCE_MAX_RETURN,
+        )
+        logger.info(
+            "query_stream: final selected sources: %d/%d  (filtering_available=%s)",
+            len(filtered_sources),
+            len(candidate_sources),
+            filtering_ok,
+        )
+
+        yield {
+            "type":                  "done",
+            "llm_backend":           llm_mode,
+            "full_answer":           full_answer,
+            "stopped":               stopped,
+            "filtered_sources":      filtered_sources,
+            "filtering_available":   filtering_ok,
+        }

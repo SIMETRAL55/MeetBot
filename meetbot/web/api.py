@@ -17,15 +17,16 @@ GET  /api/jobs/{job_id}/download?type=transcription|diarization|aligned
     Returns the requested JSON file as an attachment download.
 """
 
+import json as _json
 import logging
 from typing import Literal, Optional
 
 from fastapi import HTTPException, Query as QueryParam
-from fastapi.responses import JSONResponse, FileResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..db.database import get_session
-from ..db.crud import get_job
+from ..db.crud import get_job, build_aligned_json_from_db
 from ..db.models import JobStatus
 
 logger = logging.getLogger(__name__)
@@ -149,52 +150,83 @@ async def api_job_download(
     db = SessionLocal()
     try:
         job = get_job(db, job_id)
+
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        # Allow download from any terminal or near-terminal status.
+        # REINDEXING means edits are being baked into the vector store — the
+        # aligned transcript is still fully valid and downloadable.
+        _downloadable = {
+            JobStatus.COMPLETED,
+            JobStatus.REINDEXING,
+            JobStatus.FAILED,
+        }
+        if job.status not in _downloadable:
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"Transcript not yet available — job is still processing "
+                    f"(status: {job.status.value})"
+                ),
+            )
+
+        from pathlib import Path
+        stem = Path(job.original_filename).stem
+        download_name = f"{stem}_{type}.json"
+
+        # ── aligned: always regenerate from DB so edits are never stale ──────
+        if type == "aligned":
+            try:
+                payload = build_aligned_json_from_db(db, job_id)
+            except Exception as exc:
+                logger.error(
+                    "api_job_download: could not build aligned JSON from DB for "
+                    "job %s: %s", job_id[:8], exc, exc_info=True
+                )
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Could not build transcript: {exc}",
+                ) from exc
+            content = _json.dumps(payload, ensure_ascii=False, indent=2)
+            return StreamingResponse(
+                iter([content.encode("utf-8")]),
+                media_type="application/json",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{download_name}"',
+                },
+            )
+
+        # ── transcription / diarization: served from the raw on-disk file ─────
+        path_map = {
+            "transcription":  job.transcription_json_path,
+            "diarization":    job.diarization_json_path,
+        }
+        file_path = path_map.get(type)
+
+        if not file_path:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"The '{type}' output is not available for this job. "
+                    "It may have been processed before this feature was added."
+                ),
+            )
+
+        p = Path(file_path)
+        if not p.exists():
+            raise HTTPException(
+                status_code=404,
+                detail=f"Output file not found on disk: {file_path}",
+            )
+
+        return FileResponse(
+            path=str(p),
+            media_type="application/json",
+            filename=download_name,
+        )
     finally:
         db.close()
-
-    if job is None:
-        raise HTTPException(status_code=404, detail="Job not found")
-
-    if job.status != JobStatus.COMPLETED:
-        raise HTTPException(
-            status_code=409,
-            detail=f"Job not completed — status: {job.status.value}",
-        )
-
-    # Resolve the requested path
-    path_map = {
-        "aligned":        job.result_json_path,
-        "transcription":  job.transcription_json_path,
-        "diarization":    job.diarization_json_path,
-    }
-    file_path = path_map.get(type)
-
-    if not file_path:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                f"The '{type}' output is not available for this job. "
-                "It may have been processed before this feature was added."
-            ),
-        )
-
-    from pathlib import Path
-    p = Path(file_path)
-    if not p.exists():
-        raise HTTPException(
-            status_code=404,
-            detail=f"Output file not found on disk: {file_path}",
-        )
-
-    # Build a human-readable download filename
-    stem = Path(job.original_filename).stem
-    download_name = f"{stem}_{type}.json"
-
-    return FileResponse(
-        path=str(p),
-        media_type="application/json",
-        filename=download_name,
-    )
 
 
 # ── Reindex handler ───────────────────────────────────────────────────────────

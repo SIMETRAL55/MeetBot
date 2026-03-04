@@ -15,7 +15,8 @@ import logging
 import threading
 from datetime import datetime
 
-from nicegui import ui
+from nicegui import ui, app
+from nicegui.client import Client as _NiceGuiClient
 
 from ..auth import get_current_user_id
 from ..components.nav import create_header
@@ -26,6 +27,7 @@ from ...db.crud import (
     get_chat_messages,
     get_job,
     get_or_create_chat_session,
+    update_chat_message,
 )
 from ...db.database import get_session
 from ...db.models import JobStatus
@@ -72,8 +74,28 @@ async def query_page(job_id: str) -> None:  # noqa: C901
     finally:
         db.close()
 
+    # Fetch document count for the k-input upper bound.  Uses only the
+    # lightweight chromadb count API (no model loading).
+    import asyncio as _asyncio
+    from ...services.query_service import QueryService as _QS
+    try:
+        _doc_count: int = await _asyncio.get_event_loop().run_in_executor(
+            None, _QS.count_documents, job_db_dir
+        )
+    except Exception:
+        _doc_count = 0
+    # If count is unavailable, allow at least RAG_TOP_K docs
+    doc_count_max: int = max(_doc_count, settings.RAG_TOP_K)
+
     # ─────────────────────────── page skeleton ───────────────────────────
     create_header()
+
+    # Capture the NiceGUI Client for this browser tab.  The reference is
+    # valid for the entire lifetime of the page; we use it to:
+    #   • detect disconnect and signal the background stream thread
+    #   • guard UI mutations after the client has been deleted (browser
+    #     refresh / navigation) to suppress spurious NiceGUI warnings
+    _page_client: _NiceGuiClient = ui.context.client
 
     with ui.column().classes("w-full max-w-4xl mx-auto p-4 gap-3"):
 
@@ -101,7 +123,7 @@ async def query_page(job_id: str) -> None:  # noqa: C901
             ui.button("Clear History", icon="delete_outline",
                       on_click=do_clear).props("flat color=red size=sm")
 
-        # ── LLM backend selector ─────────────────────────────────────────
+        # ── LLM backend selector + RAG k control ────────────────────────
         with ui.card().classes("w-full p-3"):
             with ui.row().classes("items-center gap-4 flex-wrap"):
                 ui.label("LLM:").classes("text-sm font-semibold text-gray-700")
@@ -128,6 +150,26 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                         hf_warn.classes(add="hidden")
 
                 llm_mode_radio.on("update:model-value", _on_mode)
+
+            # ── RAG k (number of retrieved sources) ──────────────────────
+            with ui.row().classes("items-center gap-3 mt-2 flex-wrap"):
+                ui.label("Sources to retrieve (k):").classes(
+                    "text-sm font-semibold text-gray-700 whitespace-nowrap"
+                )
+                _k_default = min(settings.RAG_TOP_K, doc_count_max)
+                rag_k_input = ui.number(
+                    value=_k_default,
+                    min=1,
+                    max=doc_count_max,
+                    step=1,
+                    format="%.0f",
+                ).props("dense outlined").classes("w-24").tooltip(
+                    f"How many transcript chunks to fetch (1–{doc_count_max}). "
+                    "Higher k → more context for the LLM, slightly slower retrieval."
+                )
+                ui.label(f"/ {doc_count_max} available").classes(
+                    "text-xs text-gray-500"
+                )
 
         # ── Chat scroll area ─────────────────────────────────────────────
         scroll = ui.scroll_area().classes(
@@ -163,11 +205,21 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                                 spk = s.get("speaker", "Unknown")
                                 t0, t1 = s.get("start", 0), s.get("end", 0)
                                 txt = s.get("text", "")
+                                rel = s.get("relevance_pct")
                                 ms, ss = int(t0 // 60), int(t0 % 60)
                                 me, se = int(t1 // 60), int(t1 % 60)
                                 with ui.expansion(
                                     f"[{idx}] {spk} — {ms}:{ss:02d}–{me}:{se:02d}"
                                 ).classes("w-full"):
+                                    if rel is not None:
+                                        ui.badge(
+                                            f"relevance {rel} %",
+                                            color=(
+                                                "green" if rel >= 60
+                                                else "orange" if rel >= 30
+                                                else "red"
+                                            ),
+                                        ).classes("text-xs mb-1")
                                     ui.label(txt).classes(
                                         "whitespace-pre-wrap text-xs text-gray-600"
                                     )
@@ -185,13 +237,34 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                 if msg.created_at
                 else ""
             )
-            _render_bubble(
-                msg.role,
-                msg.content,
-                d.get("sources", []),
-                msg.llm_backend or "",
-                stamp=stamp,
-            )
+            msg_status = d.get("status", "completed")
+            if msg_status == "streaming":
+                # A "streaming" row means the server was generating when the
+                # client last disconnected and the stream had not yet finished.
+                # Show the partial content (may be empty) with a badge so the
+                # user knows the response was never completed.  On the next
+                # fresh query the session continues normally.
+                with messages_col:
+                    with ui.chat_message(
+                        name="MeetBot",
+                        stamp=stamp,
+                        sent=False,
+                    ).classes("w-full"):
+                        if d.get("content"):
+                            ui.label(d["content"]).classes("whitespace-pre-wrap text-sm")
+                        ui.badge(
+                            "⏳ Generation was in progress when you left — "
+                            "answer may be incomplete",
+                            color="orange",
+                        ).classes("text-xs mt-1")
+            else:
+                _render_bubble(
+                    msg.role,
+                    d["content"],
+                    d.get("sources", []),
+                    msg.llm_backend or "",
+                    stamp=stamp,
+                )
 
         # Scroll to bottom after history is painted
         scroll.scroll_to(percent=1)
@@ -201,6 +274,22 @@ async def query_page(job_id: str) -> None:  # noqa: C901
         # Holds the threading.Event for the current in-flight query so the
         # Stop button can set it from the NiceGUI async context.
         current_stop_event: dict = {"event": None}
+
+        # ── Client disconnect → signal background stream thread ──────────
+        # NiceGUI fires client.on_disconnect() as soon as the browser tab
+        # closes, refreshes, or navigates away.  Signalling stop_event here
+        # means the background thread stops even if CancelledError is
+        # delivered slightly later (or never, depending on NiceGUI version).
+        def _on_page_disconnect(_client: _NiceGuiClient | None = None) -> None:
+            ev = current_stop_event["event"]
+            if ev is not None and not ev.is_set():
+                logger.info(
+                    "query: client disconnected for job %s — signalling stream stop",
+                    job_id,
+                )
+                ev.set()
+
+        _page_client.on_disconnect(_on_page_disconnect)
 
         with ui.row().classes("w-full items-end gap-2 mt-1"):
             question_input = ui.textarea(
@@ -226,6 +315,14 @@ async def query_page(job_id: str) -> None:  # noqa: C901
         async def handle_query() -> None:  # noqa: C901
             if is_busy["value"]:
                 return
+
+            # Guard helper: returns True only while the browser tab that
+            # initiated this query is still connected.  Checking _deleted
+            # (the same flag NiceGUI checks internally in check_existence)
+            # lets us skip UI mutations instead of generating a flood of
+            # "Client has been deleted" warnings in the logs.
+            def _live() -> bool:
+                return not _page_client._deleted
 
             question = question_input.value.strip()
             if not question:
@@ -257,6 +354,33 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                 db_u.close()
             _render_bubble("user", question, [], "", stamp=now_stamp)
 
+            # Create streaming placeholder BEFORE showing the UI bubble.
+            # This row is visible on reload (with an "in progress" badge) even
+            # if the client disconnects before streaming completes.  We update
+            # it to 'completed'/'stopped'/'interrupted' when generation ends.
+            _db_ph = SessionLocal()
+            try:
+                _ph_msg = create_chat_message(
+                    _db_ph,
+                    session_id,
+                    role="assistant",
+                    content="",
+                    status="streaming",
+                    llm_backend=selected_mode,
+                )
+                _stream_msg_id: str = _ph_msg.id
+            except Exception as _ph_exc:
+                logger.error(
+                    "query: failed to create streaming placeholder: %s", _ph_exc
+                )
+                _stream_msg_id = ""
+            finally:
+                _db_ph.close()
+
+            # Exactly-once flag: whichever of (done handler / CancelledError
+            # handler) persists first sets this True so the other is a no-op.
+            _message_saved: dict = {"value": False}
+
             # Create streaming assistant bubble
             with messages_col:
                 with ui.chat_message(
@@ -284,33 +408,55 @@ async def query_page(job_id: str) -> None:  # noqa: C901
             event_q: asyncio.Queue = asyncio.Queue()
             loop = asyncio.get_event_loop()
             accumulated: list[str] = []
-            collected_sources: list = []
+            collected_sources: list = []   # all k candidates
+            final_sources: list = []        # post-answer filtered subset
 
             def _run_stream() -> None:
                 from ...services.query_service import QueryService  # local import
 
                 svc = QueryService()
                 try:
+                    _k_val = int(rag_k_input.value or settings.RAG_TOP_K)
+                    _k_clamped = max(1, min(doc_count_max, _k_val))
                     for event in svc.query_stream(
                         question=question,
                         db_dir=job_db_dir,
                         embedding_model=settings.EMBEDDING_MODEL,
                         hf_model=settings.HF_MODEL,
-                        k=settings.RAG_TOP_K,
+                        k=_k_clamped,
                         llm_mode=selected_mode,
                         abort_event=stop_event,
                     ):
-                        asyncio.run_coroutine_threadsafe(
-                            event_q.put(event), loop
-                        ).result(timeout=10)
+                        # IMPORTANT: do NOT check stop_event here before the put.
+                        # query_stream() already checks abort_event internally and
+                        # always emits a final 'done' event (with stopped=True when
+                        # aborted).  Checking stop_event here would silently drop
+                        # that 'done' event, causing the placeholder DB row to
+                        # remain 'streaming' forever and the answer to be lost.
+                        # Break only when the queue put fails (loop torn down).
+                        try:
+                            asyncio.run_coroutine_threadsafe(
+                                event_q.put(event), loop
+                            ).result(timeout=10)
+                        except Exception:
+                            # The asyncio loop is shutting down (page navigated
+                            # away / refreshed).  Stop streaming cleanly.
+                            stop_event.set()
+                            break
                 except Exception as exc:  # noqa: BLE001
-                    asyncio.run_coroutine_threadsafe(
-                        event_q.put({"type": "error", "data": str(exc)}), loop
-                    ).result(timeout=5)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            event_q.put({"type": "error", "data": str(exc)}), loop
+                        ).result(timeout=5)
+                    except Exception:
+                        pass
                 finally:
-                    asyncio.run_coroutine_threadsafe(
-                        event_q.put({"type": "_sentinel"}), loop
-                    ).result(timeout=5)
+                    try:
+                        asyncio.run_coroutine_threadsafe(
+                            event_q.put({"type": "_sentinel"}), loop
+                        ).result(timeout=5)
+                    except Exception:
+                        pass  # Loop already gone; sentinel not needed
 
             try:
                 stream_future = loop.run_in_executor(None, _run_stream)
@@ -324,6 +470,7 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                         answer_label.set_text(
                             "[Timed out waiting for response]"
                         )
+                        stop_event.set()
                         break
 
                     etype = event.get("type")
@@ -336,28 +483,26 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                         collected_sources = event.get("data", [])
                         if collected_sources:
                             with sources_col:
+                                # Temporary "Retrieving…" label while LLM streams.
+                                # The done handler will replace this with filtered sources.
                                 with ui.expansion(
-                                    "Sources", icon="source"
-                                ).classes("w-full text-xs"):
+                                    f"Candidates ({len(collected_sources)} retrieved)",
+                                    icon="manage_search",
+                                ).classes("w-full text-xs text-gray-400"):
                                     for idx, s in enumerate(
                                         collected_sources, 1
                                     ):
                                         spk = s.get("speaker", "Unknown")
                                         t0 = s.get("start", 0)
                                         t1 = s.get("end", 0)
-                                        txt = s.get("text", "")
                                         ms = int(t0 // 60)
                                         ss = int(t0 % 60)
                                         me = int(t1 // 60)
                                         se = int(t1 % 60)
-                                        with ui.expansion(
+                                        ui.label(
                                             f"[{idx}] {spk} — "
                                             f"{ms}:{ss:02d}–{me}:{se:02d}"
-                                        ).classes("w-full"):
-                                            ui.label(txt).classes(
-                                                "whitespace-pre-wrap "
-                                                "text-xs text-gray-600"
-                                            )
+                                        ).classes("text-xs text-gray-400")
 
                     elif etype == "token":
                         accumulated.append(event.get("data", ""))
@@ -368,39 +513,114 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                         full_answer = "".join(accumulated)
                         was_stopped = event.get("stopped", False)
                         llm_be = event.get("llm_backend", selected_mode)
-                        if was_stopped:
-                            answer_label.set_text(
-                                ("\n".join(accumulated) if accumulated else "")
-                            )
-                            # Append a subtle stopped indicator
-                            with messages_col:
-                                ui.badge("⏹ Generation stopped", color="grey").classes(
-                                    "text-xs mt-1"
+                        # Filtered sources from post-answer embedding comparison
+                        final_sources = event.get("filtered_sources") or collected_sources
+                        filtering_ok  = event.get("filtering_available", True)
+
+                        # ── 1. DB save FIRST, before touching any UI element ──
+                        # Persisting before DOM mutations means a socket drop
+                        # between streaming completion and UI rebuild cannot
+                        # lose the answer.  The save is isolated so any DB /
+                        # JSON serialisation error is logged + badged without
+                        # propagating out of this handler.
+                        full_answer_to_save = (
+                            (full_answer + "\n*(generation stopped)*" if full_answer
+                             else "*(generation stopped)*")
+                            if was_stopped else full_answer
+                        )
+                        _final_status = "stopped" if was_stopped else "completed"
+                        _db_save_ok = True
+                        if not _message_saved["value"] and _stream_msg_id:
+                            db_a = SessionLocal()
+                            try:
+                                update_chat_message(
+                                    db_a,
+                                    _stream_msg_id,
+                                    content=full_answer_to_save,
+                                    status=_final_status,
+                                    sources=final_sources,
+                                    llm_backend=llm_be,
                                 )
-                            full_answer_to_save = (
-                                full_answer + "\n*(generation stopped)*"
-                                if full_answer
-                                else "*(generation stopped)*"
-                            )
-                        else:
-                            full_answer_to_save = full_answer
-                            backend_badge.set_text(
-                                _LLM_OPTIONS.get(llm_be, llm_be)
-                            )
-                            backend_badge.classes(remove="hidden")
-                        # Persist assistant message (partial or full)
-                        db_a = SessionLocal()
-                        try:
-                            create_chat_message(
-                                db_a,
-                                session_id,
-                                role="assistant",
-                                content=full_answer_to_save,
-                                sources=collected_sources,
-                                llm_backend=llm_be,
-                            )
-                        finally:
-                            db_a.close()
+                                _message_saved["value"] = True
+                                logger.info(
+                                    "query: finalised assistant message %s "
+                                    "(%d chars, status=%s)",
+                                    _stream_msg_id[:8], len(full_answer_to_save),
+                                    _final_status,
+                                )
+                            except Exception as _save_exc:
+                                _db_save_ok = False
+                                logger.error(
+                                    "query: failed to finalise assistant message "
+                                    "%s: %s",
+                                    _stream_msg_id[:8], _save_exc, exc_info=True,
+                                )
+                            finally:
+                                db_a.close()
+
+                        # ── 2. UI updates — only if client still connected ────
+                        # All DOM mutations gated on _live() so a browser
+                        # refresh racing with the done event does not flood
+                        # logs with NiceGUI "Client has been deleted" warnings.
+                        # The answer is already safe in the DB regardless.
+                        if _live():
+                            # Replace candidate sources panel with filtered sources
+                            sources_col.clear()
+                            if final_sources:
+                                with sources_col:
+                                    with ui.expansion(
+                                        f"Sources ({len(final_sources)})", icon="source"
+                                    ).classes("w-full text-xs"):
+                                        if not filtering_ok:
+                                            ui.badge(
+                                                "source filtering unavailable",
+                                                color="grey",
+                                            ).classes("text-xs mb-1")
+                                        for idx, s in enumerate(final_sources, 1):
+                                            spk = s.get("speaker", "Unknown")
+                                            t0  = s.get("start", 0)
+                                            t1  = s.get("end", 0)
+                                            txt = s.get("text", "")
+                                            rel = s.get("answer_relevance_pct",
+                                                        s.get("relevance_pct"))
+                                            ms, ss2 = int(t0 // 60), int(t0 % 60)
+                                            me, se  = int(t1 // 60), int(t1 % 60)
+                                            with ui.expansion(
+                                                f"[{idx}] {spk} — {ms}:{ss2:02d}–{me}:{se:02d}"
+                                            ).classes("w-full"):
+                                                if rel is not None:
+                                                    ui.badge(
+                                                        f"relevance {rel} %",
+                                                        color=(
+                                                            "green"  if rel >= 60
+                                                            else "orange" if rel >= 30
+                                                            else "red"
+                                                        ),
+                                                    ).classes("text-xs mb-1")
+                                                ui.label(txt).classes(
+                                                    "whitespace-pre-wrap "
+                                                    "text-xs text-gray-600"
+                                                )
+
+                            if was_stopped:
+                                answer_label.set_text("".join(accumulated))
+                                with messages_col:
+                                    ui.badge("⏹ Generation stopped", color="grey").classes(
+                                        "text-xs mt-1"
+                                    )
+                            else:
+                                answer_label.set_text(full_answer)
+                                backend_badge.set_text(
+                                    _LLM_OPTIONS.get(llm_be, llm_be)
+                                )
+                                backend_badge.classes(remove="hidden")
+
+                            if not _db_save_ok:
+                                with messages_col:
+                                    ui.badge(
+                                        "⚠ Answer not saved — check server logs",
+                                        color="orange",
+                                    ).classes("text-xs mt-1")
                         break
 
                     elif etype == "error":
@@ -412,20 +632,65 @@ async def query_page(job_id: str) -> None:  # noqa: C901
 
                 await stream_future
 
+            except asyncio.CancelledError:
+                # Page was refreshed or navigated away while streaming.
+                # Signal the background thread to stop, persist whatever we
+                # have so the history survives reload, then re-raise so the
+                # NiceGUI task lifecycle is handled correctly.
+                logger.info(
+                    "Query page disconnected mid-stream for job %s — "
+                    "persisting partial answer (%d tokens)",
+                    job_id, len(accumulated),
+                )
+                stop_event.set()
+                if not _message_saved["value"] and _stream_msg_id:
+                    partial_text = (
+                        "".join(accumulated) + "\n*(generation interrupted)*"
+                        if accumulated else ""
+                    )
+                    _db = SessionLocal()
+                    try:
+                        update_chat_message(
+                            _db,
+                            _stream_msg_id,
+                            content=partial_text,
+                            status="interrupted",
+                            sources=collected_sources,
+                            llm_backend=selected_mode,
+                        )
+                        _message_saved["value"] = True
+                    except Exception as _db_exc:
+                        logger.warning(
+                            "Could not persist partial answer for msg %s: %s",
+                            _stream_msg_id[:8], _db_exc,
+                        )
+                    finally:
+                        _db.close()
+                raise  # Let NiceGUI cancel the task normally
+
             except Exception as exc:  # noqa: BLE001
                 logger.error("Streaming query failed: %s", exc, exc_info=True)
-                answer_label.set_text(f"Error: {exc}")
-                answer_label.classes(add="text-red-600")
+                try:
+                    answer_label.set_text(f"Error: {exc}")
+                    answer_label.classes(add="text-red-600")
+                except Exception:
+                    pass
 
             finally:
-                typing_row.set_visibility(False)
+                # Always update pure-Python state regardless of client lifecycle.
                 is_busy["value"] = False
-                ask_btn.enable()
-                question_input.enable()
-                stop_btn.set_visibility(False)
-                stop_btn.enable()
                 current_stop_event["event"] = None
-                scroll.scroll_to(percent=1)
+                # Gate all NiceGUI element mutations on _live() to avoid the
+                # "Client has been deleted but is still being used" warning that
+                # fires whenever the browser navigates away while this coroutine
+                # is still unwinding its finally block.
+                if _live():
+                    typing_row.set_visibility(False)
+                    ask_btn.enable()
+                    question_input.enable()
+                    stop_btn.set_visibility(False)
+                    stop_btn.enable()
+                    scroll.scroll_to(percent=1)
 
         ask_btn.on_click(handle_query)
 

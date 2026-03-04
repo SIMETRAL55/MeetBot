@@ -16,7 +16,7 @@ build/
 .coverage
 .pytest_cache/
 htmlcov/
-
+.nicegui/
 
 # ============================================================================
 # IDE & Editor Files
@@ -86,7 +86,8 @@ db/
 *.db
 *.sqlite
 *.sqlite3
-
+*.db-wal
+*.db-shm
 # Results and outputs (user-generated, should commit selectively)
 results/
 output/

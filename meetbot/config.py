@@ -171,6 +171,25 @@ class Settings(BaseSettings):
         description="Number of documents to retrieve in RAG queries",
     )
 
+    SOURCE_SIM_THRESHOLD: float = Field(
+        0.30,
+        env="SOURCE_SIM_THRESHOLD",
+        description=(
+            "Minimum cosine similarity (0–1) between the generated answer embedding "
+            "and a candidate source chunk for that chunk to appear in the final "
+            "sources list.  Lower = show more sources; higher = stricter."
+        ),
+    )
+
+    SOURCE_MAX_RETURN: int = Field(
+        5,
+        env="SOURCE_MAX_RETURN",
+        description=(
+            "Maximum number of sources to display after answer-embedding filtering. "
+            "Must be ≤ RAG_TOP_K."
+        ),
+    )
+
     # =========================================================================
     # Device & Performance Configuration
     # =========================================================================

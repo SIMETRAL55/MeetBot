@@ -73,88 +73,8 @@ def job_detail_page(job_id: str) -> None:
                         "text-sm text-gray-500"
                     )
 
-            # Action buttons
+            # Action buttons (completed-only quick actions)
             with ui.row().classes("gap-2"):
-                # ── Cancel button: visible while job is actively processing ─────────
-                _cancellable = {
-                    JobStatus.PENDING,
-                    JobStatus.TRANSCRIBING,
-                    JobStatus.DIARIZING,
-                    JobStatus.ALIGNING,
-                    JobStatus.INDEXING,
-                    JobStatus.REINDEXING,
-                }
-                if job_status in _cancellable:
-                    async def _do_cancel(jid: str = job_id) -> None:
-                        with ui.dialog() as cancel_dialog, ui.card():
-                            ui.label(
-                                "Stop processing this job? "
-                                "The current stage will run to completion before stopping."
-                            ).classes("text-base")
-                            with ui.row().classes("justify-end gap-2 mt-2"):
-                                ui.button(
-                                    "Keep running",
-                                    on_click=lambda: cancel_dialog.submit(False),
-                                ).props("flat")
-                                ui.button(
-                                    "Stop processing",
-                                    on_click=lambda: cancel_dialog.submit(True),
-                                ).props("color=red")
-                        confirmed = await cancel_dialog
-                        if not confirmed:
-                            return
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.post(
-                                    f"http://localhost:{settings.WEB_PORT}"
-                                    f"/api/jobs/{jid}/cancel",
-                                    timeout=10,
-                                )
-                            if resp.status_code == 200:
-                                ui.notify("Processing stopped", type="positive")
-                                ui.navigate.to(f"/job/{jid}")
-                            else:
-                                detail = resp.json().get("detail", resp.text)
-                                ui.notify(f"Cancel failed: {detail}", type="negative")
-                        except Exception as exc:
-                            ui.notify(f"Request error: {exc}", type="negative")
-
-                    ui.button(
-                        "Stop",
-                        icon="stop_circle",
-                        on_click=_do_cancel,
-                    ).props("color=red outline").tooltip(
-                        "Stop processing at the next stage boundary"
-                    )
-
-                # ── Restart button: visible for cancelled or failed jobs ───────
-                if job_status in (JobStatus.CANCELLED, JobStatus.FAILED):
-                    async def _do_restart(jid: str = job_id) -> None:
-                        try:
-                            async with httpx.AsyncClient() as client:
-                                resp = await client.post(
-                                    f"http://localhost:{settings.WEB_PORT}"
-                                    f"/api/jobs/{jid}/restart",
-                                    timeout=10,
-                                )
-                            if resp.status_code == 202:
-                                ui.notify("Restarting processing…", type="positive")
-                                ui.navigate.to(f"/job/{jid}")
-                            else:
-                                detail = resp.json().get("detail", resp.text)
-                                ui.notify(f"Restart failed: {detail}", type="negative")
-                        except Exception as exc:
-                            ui.notify(f"Request error: {exc}", type="negative")
-
-                    ui.button(
-                        "Restart",
-                        icon="replay",
-                        on_click=_do_restart,
-                    ).props("color=orange outline").tooltip(
-                        "Re-run the full processing pipeline from the beginning "
-                        "(cached results make this fast)"
-                    )
-
                 if job_status == JobStatus.COMPLETED and job_db_dir:
                     ui.button(
                         "Query",
@@ -237,20 +157,93 @@ def job_detail_page(job_id: str) -> None:
                         )
 
         # Content area depends on status
-        if job_status in (
+        _cancellable = {
             JobStatus.PENDING,
             JobStatus.TRANSCRIBING,
             JobStatus.DIARIZING,
             JobStatus.ALIGNING,
             JobStatus.INDEXING,
             JobStatus.REINDEXING,
-        ):
-            # Still processing (or reindexing) — show progress
-            stage_label = (
-                "Reindexing" if job_status == JobStatus.REINDEXING else "Processing"
-            )
-            ui.label(stage_label).classes("text-lg font-semibold mt-4")
+        }
 
+        if job_status in _cancellable:
+            # ──────────────── Prominent processing action banner ────────────────
+            # Placed at the TOP of the content area so it cannot be missed.
+            with ui.card().classes(
+                "w-full p-4 bg-orange-50 border border-orange-200"
+            ):
+                with ui.row().classes("w-full items-center justify-between flex-wrap gap-3"):
+                    with ui.row().classes("items-center gap-3"):
+                        ui.spinner("dots", size="md").classes("text-orange-500")
+                        with ui.column().classes("gap-0"):
+                            stage_label = (
+                                "Reindexing transcript" if job_status == JobStatus.REINDEXING
+                                else {
+                                    JobStatus.PENDING:     "Queued — waiting to start",
+                                    JobStatus.TRANSCRIBING: "Transcribing audio",
+                                    JobStatus.DIARIZING:   "Identifying speakers",
+                                    JobStatus.ALIGNING:    "Aligning transcript",
+                                    JobStatus.INDEXING:    "Building search index",
+                                }.get(job_status, "Processing")
+                            )
+                            ui.label(stage_label).classes(
+                                "text-base font-semibold text-orange-700"
+                            )
+                            ui.label(
+                                "Processing will stop cleanly at the end of the current stage."
+                            ).classes("text-xs text-orange-500")
+
+                    async def _do_cancel_content(jid: str = job_id) -> None:
+                        with ui.dialog() as dlg, ui.card():
+                            ui.label(
+                                "Stop processing this job?"
+                            ).classes("text-base font-semibold")
+                            ui.label(
+                                "The current stage will finish before the worker stops. "
+                                "You can restart later — Whisper and Pyannote results are cached."
+                            ).classes("text-sm text-gray-600 mt-1")
+                            with ui.row().classes("justify-end gap-2 mt-3"):
+                                ui.button(
+                                    "Keep running",
+                                    on_click=lambda: dlg.submit(False),
+                                ).props("flat")
+                                ui.button(
+                                    "Stop processing",
+                                    icon="stop_circle",
+                                    on_click=lambda: dlg.submit(True),
+                                ).props("color=red")
+                        confirmed = await dlg
+                        if not confirmed:
+                            return
+                        cancel_content_btn.props(add="loading")
+                        cancel_content_btn.disable()
+                        try:
+                            async with httpx.AsyncClient() as hc:
+                                resp = await hc.post(
+                                    f"http://localhost:{settings.WEB_PORT}"
+                                    f"/api/jobs/{jid}/cancel",
+                                    timeout=10,
+                                )
+                            if resp.status_code == 200:
+                                ui.notify("Cancellation requested", type="positive")
+                                ui.navigate.to(f"/job/{jid}")
+                            else:
+                                detail = resp.json().get("detail", resp.text)
+                                ui.notify(f"Cancel failed: {detail}", type="negative")
+                                cancel_content_btn.props(remove="loading")
+                                cancel_content_btn.enable()
+                        except Exception as exc:
+                            ui.notify(f"Request error: {exc}", type="negative")
+                            cancel_content_btn.props(remove="loading")
+                            cancel_content_btn.enable()
+
+                    cancel_content_btn = ui.button(
+                        "Stop Processing",
+                        icon="stop_circle",
+                        on_click=_do_cancel_content,
+                    ).props("color=red").classes("text-sm")
+
+            # Progress display below the banner
             def on_complete():
                 ui.notify("Processing complete! Refreshing...", type="positive")
                 ui.navigate.to(f"/job/{job_id}")
@@ -265,30 +258,89 @@ def job_detail_page(job_id: str) -> None:
             )
 
         elif job_status == JobStatus.CANCELLED:
-            with ui.card().classes("w-full p-4 bg-yellow-50"):
-                ui.label("Processing Cancelled").classes(
-                    "text-lg font-semibold text-yellow-700"
-                )
-                ui.label(
-                    "This job was stopped before it could finish. "
-                    "Use the Restart button above to re-run the pipeline. "
-                    "Whisper and Pyannote outputs are cached, so restart is fast."
-                ).classes("text-sm text-yellow-600 mt-2")
+            with ui.card().classes("w-full p-4 bg-yellow-50 border border-yellow-200"):
+                with ui.row().classes("w-full items-start justify-between flex-wrap gap-3"):
+                    with ui.column().classes("gap-1"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("cancel", size="sm").classes("text-yellow-600")
+                            ui.label("Processing Cancelled").classes(
+                                "text-lg font-semibold text-yellow-700"
+                            )
+                        ui.label(
+                            "This job was stopped before it could finish. "
+                            "Whisper and Pyannote outputs are cached, so a restart is fast."
+                        ).classes("text-sm text-yellow-600")
+
+                    async def _do_restart_cancelled(jid: str = job_id) -> None:
+                        restart_cancelled_btn.props(add="loading")
+                        restart_cancelled_btn.disable()
+                        try:
+                            async with httpx.AsyncClient() as hc:
+                                resp = await hc.post(
+                                    f"http://localhost:{settings.WEB_PORT}"
+                                    f"/api/jobs/{jid}/restart",
+                                    timeout=10,
+                                )
+                            if resp.status_code == 202:
+                                ui.notify("Job restarted", type="positive")
+                                ui.navigate.to(f"/job/{jid}")
+                            else:
+                                detail = resp.json().get("detail", resp.text)
+                                ui.notify(f"Restart failed: {detail}", type="negative")
+                                restart_cancelled_btn.props(remove="loading")
+                                restart_cancelled_btn.enable()
+                        except Exception as exc:
+                            ui.notify(f"Request error: {exc}", type="negative")
+                            restart_cancelled_btn.props(remove="loading")
+                            restart_cancelled_btn.enable()
+
+                    restart_cancelled_btn = ui.button(
+                        "Restart Processing",
+                        icon="replay",
+                        on_click=_do_restart_cancelled,
+                    ).props("color=blue").classes("text-sm self-center")
 
         elif job_status == JobStatus.FAILED:
-            # Failed — show error
-            with ui.card().classes("w-full p-4 bg-red-50"):
-                ui.label("Processing Failed").classes(
-                    "text-lg font-semibold text-red-700"
-                )
-                ui.label(job_error or "Unknown error").classes(
-                    "text-sm text-red-600 whitespace-pre-wrap mt-2"
-                )
-                ui.button(
-                    "Back to Dashboard",
-                    icon="arrow_back",
-                    on_click=lambda: ui.navigate.to("/"),
-                ).props("flat").classes("mt-2")
+            with ui.card().classes("w-full p-4 bg-red-50 border border-red-200"):
+                with ui.row().classes("w-full items-start justify-between flex-wrap gap-3"):
+                    with ui.column().classes("gap-1 flex-1"):
+                        with ui.row().classes("items-center gap-2"):
+                            ui.icon("error", size="sm").classes("text-red-600")
+                            ui.label("Processing Failed").classes(
+                                "text-lg font-semibold text-red-700"
+                            )
+                        ui.label(job_error or "Unknown error").classes(
+                            "text-sm text-red-600 whitespace-pre-wrap"
+                        )
+
+                    async def _do_restart_failed(jid: str = job_id) -> None:
+                        restart_failed_btn.props(add="loading")
+                        restart_failed_btn.disable()
+                        try:
+                            async with httpx.AsyncClient() as hc:
+                                resp = await hc.post(
+                                    f"http://localhost:{settings.WEB_PORT}"
+                                    f"/api/jobs/{jid}/restart",
+                                    timeout=10,
+                                )
+                            if resp.status_code == 202:
+                                ui.notify("Job restarted", type="positive")
+                                ui.navigate.to(f"/job/{jid}")
+                            else:
+                                detail = resp.json().get("detail", resp.text)
+                                ui.notify(f"Restart failed: {detail}", type="negative")
+                                restart_failed_btn.props(remove="loading")
+                                restart_failed_btn.enable()
+                        except Exception as exc:
+                            ui.notify(f"Request error: {exc}", type="negative")
+                            restart_failed_btn.props(remove="loading")
+                            restart_failed_btn.enable()
+
+                    restart_failed_btn = ui.button(
+                        "Restart Processing",
+                        icon="replay",
+                        on_click=_do_restart_failed,
+                    ).props("color=blue").classes("text-sm self-center")
 
         elif job_status == JobStatus.COMPLETED:
             # Completed — show audio + transcript

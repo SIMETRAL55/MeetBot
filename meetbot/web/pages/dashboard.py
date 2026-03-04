@@ -11,10 +11,12 @@ Provides:
 import logging
 from datetime import datetime, timezone
 
+import httpx
 from nicegui import ui, app
 
 from ..auth import get_current_user_id
 from ..components.nav import create_header
+from ...config import settings
 from ...db.database import get_session
 from ...db.crud import get_jobs_for_user, delete_job, get_job
 from ...db.models import JobStatus
@@ -24,23 +26,41 @@ logger = logging.getLogger(__name__)
 
 # Status badge colors
 STATUS_COLORS = {
-    JobStatus.PENDING: "grey",
+    JobStatus.PENDING:      "grey",
     JobStatus.TRANSCRIBING: "blue",
-    JobStatus.DIARIZING: "purple",
-    JobStatus.ALIGNING: "orange",
-    JobStatus.INDEXING: "cyan",
-    JobStatus.COMPLETED: "green",
-    JobStatus.FAILED: "red",
+    JobStatus.DIARIZING:    "purple",
+    JobStatus.ALIGNING:     "orange",
+    JobStatus.INDEXING:     "cyan",
+    JobStatus.REINDEXING:   "teal",
+    JobStatus.COMPLETED:    "green",
+    JobStatus.CANCELLED:    "yellow",
+    JobStatus.FAILED:       "red",
 }
 
 STATUS_ICONS = {
-    JobStatus.PENDING: "hourglass_empty",
+    JobStatus.PENDING:      "hourglass_empty",
     JobStatus.TRANSCRIBING: "mic",
-    JobStatus.DIARIZING: "group",
-    JobStatus.ALIGNING: "merge_type",
-    JobStatus.INDEXING: "search",
-    JobStatus.COMPLETED: "check_circle",
-    JobStatus.FAILED: "error",
+    JobStatus.DIARIZING:    "group",
+    JobStatus.ALIGNING:     "merge_type",
+    JobStatus.INDEXING:     "search",
+    JobStatus.REINDEXING:   "autorenew",
+    JobStatus.COMPLETED:    "check_circle",
+    JobStatus.CANCELLED:    "cancel",
+    JobStatus.FAILED:       "error",
+}
+
+_ACTIVE_STATUSES = {
+    JobStatus.PENDING,
+    JobStatus.TRANSCRIBING,
+    JobStatus.DIARIZING,
+    JobStatus.ALIGNING,
+    JobStatus.INDEXING,
+    JobStatus.REINDEXING,
+}
+
+_RESTARTABLE_STATUSES = {
+    JobStatus.CANCELLED,
+    JobStatus.FAILED,
 }
 
 
@@ -156,7 +176,7 @@ def _render_job_card(job, refresh_callback) -> None:
                     color=color,
                 ).props("outline")
 
-                if job.status not in (JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.PENDING):
+                if job.status in _ACTIVE_STATUSES and job.status != JobStatus.PENDING:
                     ui.linear_progress(
                         value=job.progress / 100,
                         show_value=False,
@@ -187,6 +207,82 @@ def _render_job_card(job, refresh_callback) -> None:
                         icon="info",
                         on_click=lambda j=job: _show_error_dialog(j),
                     ).props("flat round color=red size=sm").tooltip("View Error")
+
+                # ── Cancel button: active jobs only ────────────────────────
+                if job.status in _ACTIVE_STATUSES:
+                    async def _do_cancel_dashboard(j=job) -> None:
+                        with ui.dialog() as dlg, ui.card().classes("max-w-sm"):
+                            ui.label("Stop processing?").classes(
+                                "text-base font-semibold"
+                            )
+                            ui.label(
+                                "The current stage will finish before the worker "
+                                "stops. Whisper/Pyannote outputs are cached so a "
+                                "restart later is fast."
+                            ).classes("text-sm text-gray-600 mt-1")
+                            with ui.row().classes("justify-end gap-2 mt-3"):
+                                ui.button(
+                                    "Keep running",
+                                    on_click=lambda: dlg.submit(False),
+                                ).props("flat")
+                                ui.button(
+                                    "Stop",
+                                    icon="stop_circle",
+                                    on_click=lambda: dlg.submit(True),
+                                ).props("color=red")
+                        confirmed = await dlg
+                        if not confirmed:
+                            return
+                        try:
+                            async with httpx.AsyncClient() as hc:
+                                resp = await hc.post(
+                                    f"http://localhost:{settings.WEB_PORT}"
+                                    f"/api/jobs/{j.id}/cancel",
+                                    timeout=10,
+                                )
+                            if resp.status_code == 200:
+                                ui.notify(
+                                    "Cancellation requested", type="positive"
+                                )
+                                refresh_callback()
+                            else:
+                                detail = resp.json().get("detail", resp.text)
+                                ui.notify(f"Cancel failed: {detail}", type="negative")
+                        except Exception as exc:
+                            ui.notify(f"Request error: {exc}", type="negative")
+
+                    ui.button(
+                        icon="stop_circle",
+                        on_click=_do_cancel_dashboard,
+                    ).props("flat round color=red size=sm").tooltip(
+                        "Stop processing"
+                    )
+
+                # ── Restart button: cancelled / failed jobs ─────────────────
+                if job.status in _RESTARTABLE_STATUSES:
+                    async def _do_restart_dashboard(j=job) -> None:
+                        try:
+                            async with httpx.AsyncClient() as hc:
+                                resp = await hc.post(
+                                    f"http://localhost:{settings.WEB_PORT}"
+                                    f"/api/jobs/{j.id}/restart",
+                                    timeout=10,
+                                )
+                            if resp.status_code == 202:
+                                ui.notify("Job restarted", type="positive")
+                                refresh_callback()
+                            else:
+                                detail = resp.json().get("detail", resp.text)
+                                ui.notify(f"Restart failed: {detail}", type="negative")
+                        except Exception as exc:
+                            ui.notify(f"Request error: {exc}", type="negative")
+
+                    ui.button(
+                        icon="replay",
+                        on_click=_do_restart_dashboard,
+                    ).props("flat round color=blue size=sm").tooltip(
+                        "Restart processing (Whisper/Pyannote cached)"
+                    )
 
                 # Delete button (always available)
                 ui.button(

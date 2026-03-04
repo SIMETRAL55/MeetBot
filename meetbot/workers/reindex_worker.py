@@ -209,6 +209,14 @@ def run_reindex(job_id: str) -> None:  # noqa: C901
         except Exception:
             pass
 
+        # ── Cancel check #2: after indexing, before writing COMPLETED ─────
+        # The API endpoint writes CANCELLED to the DB immediately when the
+        # user clicks "Stop", but the only earlier checkpoint is BEFORE
+        # _run_indexer().  If the cancel flag was set DURING indexing the
+        # first check was already past — this second check catches that
+        # race and prevents overwriting CANCELLED → COMPLETED.
+        cancel_registry.check_and_raise(job_id)
+
         # ── Update DB ─────────────────────────────────────────────────
         db_dir = str(old_db_dir)
         update_job_result(db, job_id, db_dir=db_dir)
