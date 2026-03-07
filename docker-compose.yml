@@ -1,7 +1,14 @@
 # =============================================================================
 # MeetBot — Docker Compose Configuration
 #
-# Single-service deployment with GPU access and persistent storage.
+# GPU-enabled single-service deployment with persistent storage.
+#
+# Quick start:
+#   docker compose up -d
+#
+# CPU-only (no GPU):
+#   Remove the `deploy.resources.reservations` block below and set
+#   DEVICE=cpu, EMBEDDING_DEVICE=cpu, LOCAL_LLM_GPU_LAYERS=0.
 # =============================================================================
 
 services:
@@ -9,30 +16,48 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+      args:
+        # CUDA_VARIANT=cpu | cu118 | cu121 — controls which PyTorch wheel is installed.
+        # Change to cu118 or cu121 when building for a CUDA-capable host.
+        CUDA_VARIANT: ${CUDA_VARIANT:-cpu}
     container_name: meetbot-app
     ports:
       - "${WEB_PORT:-8080}:8080"
     volumes:
-      # Persistent data
-      - ./data:/app/data                    # Upload files
-      - ./results:/app/results              # Pipeline output
-      - ./db:/app/db                        # ChromaDB vector stores
-      - ./prepared:/app/prepared            # Prepared documents
-      - ./.cache_hf:/app/.cache_hf          # Model cache
-      # Local models (must exist on host)
-      - ./models:/app/models:ro             # Read-only model files
-      # SQLite database
-      - meetbot-db:/app/meetbot.db.d
+      # Persistent data — survives container restarts
+      - ./data:/app/data                    # Uploaded audio files
+      - ./results:/app/results              # Pipeline output JSONs
+      - ./db:/app/db                        # ChromaDB vector stores + SQLite DB
+      - ./temp:/app/temp                    # Temporary JSONL during indexing (auto-cleaned)
+      - ./.cache_hf:/app/.cache_hf          # HuggingFace model download cache
+      # Local model weights — mounted read-only; files must exist on host
+      - ./models:/app/models:ro
     environment:
+      # Web server
       - WEB_HOST=0.0.0.0
       - WEB_PORT=8080
       - WEB_SECRET_KEY=${WEB_SECRET_KEY:-change-this-in-production}
       - WEB_STORAGE_SECRET=${WEB_STORAGE_SECRET:-change-this-storage-secret}
-      - TRANSCRIPTION_BACKEND=local
-      - USE_LOCAL_LLM=true
-      - DEVICE=cuda
+      # Transcription backend: 'local' (GPU Whisper) or 'huggingface' (API)
+      - TRANSCRIPTION_BACKEND=${TRANSCRIPTION_BACKEND:-local}
+      # HuggingFace token (required for Pyannote and gated models)
+      - HF_API_TOKEN=${HF_API_TOKEN:-}
+      # LLM backend: 'true' = local GGUF, 'false' = HuggingFace Inference API
+      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-true}
+      # Compute devices
+      - DEVICE=${DEVICE:-cuda}
+      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cuda}
+      # Model paths (must match the volume mount above)
       - EMBEDDING_MODEL=/app/models/sarashina-embedding-v1-1b
       - LOCAL_LLM_MODEL_PATH=/app/models/rakutenai-7b-instruct-gguf
+      - LOCAL_LLM_GPU_LAYERS=${LOCAL_LLM_GPU_LAYERS:-15}
+      # I/O paths (must match volume mounts)
+      - OUTPUT_DIR=/app/results
+      - VECTOR_DB_PATH=/app/db/chroma
+      - CACHE_DIR=/app/.cache_hf
+      - TEMP_DIR=/app/temp
+    # GPU access — requires nvidia-container-toolkit on the host.
+    # Remove this block entirely for a CPU-only deployment.
     deploy:
       resources:
         reservations:
@@ -46,7 +71,9 @@ services:
       options:
         max-size: "50m"
         max-file: "3"
-
-volumes:
-  meetbot-db:
-    driver: local
+    healthcheck:
+      test: ["CMD", "curl", "-fsS", "http://localhost:8080/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 90s
+      retries: 3
