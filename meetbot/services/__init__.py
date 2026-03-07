@@ -7,6 +7,5 @@ logger = logging.getLogger(__name__)
 __all__ = [
     "TranscriberService",
     "DiarizationService",
-    "IndexerService",
     "QueryService",
 ]

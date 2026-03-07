@@ -74,19 +74,6 @@ async def query_page(job_id: str) -> None:  # noqa: C901
     finally:
         db.close()
 
-    # Fetch document count for the k-input upper bound.  Uses only the
-    # lightweight chromadb count API (no model loading).
-    import asyncio as _asyncio
-    from ...services.query_service import QueryService as _QS
-    try:
-        _doc_count: int = await _asyncio.get_event_loop().run_in_executor(
-            None, _QS.count_documents, job_db_dir
-        )
-    except Exception:
-        _doc_count = 0
-    # If count is unavailable, allow at least RAG_TOP_K docs
-    doc_count_max: int = max(_doc_count, settings.RAG_TOP_K)
-
     # ─────────────────────────── page skeleton ───────────────────────────
     create_header()
 
@@ -151,25 +138,51 @@ async def query_page(job_id: str) -> None:  # noqa: C901
 
                 llm_mode_radio.on("update:model-value", _on_mode)
 
-            # ── RAG k (number of retrieved sources) ──────────────────────
-            with ui.row().classes("items-center gap-3 mt-2 flex-wrap"):
-                ui.label("Sources to retrieve (k):").classes(
-                    "text-sm font-semibold text-gray-700 whitespace-nowrap"
-                )
-                _k_default = min(settings.RAG_TOP_K, doc_count_max)
-                rag_k_input = ui.number(
-                    value=_k_default,
-                    min=1,
-                    max=doc_count_max,
-                    step=1,
-                    format="%.0f",
-                ).props("dense outlined").classes("w-24").tooltip(
-                    f"How many transcript chunks to fetch (1–{doc_count_max}). "
-                    "Higher k → more context for the LLM, slightly slower retrieval."
-                )
-                ui.label(f"/ {doc_count_max} available").classes(
-                    "text-xs text-gray-500"
-                )
+            # ── Retrieval level selector ─────────────────────────────────
+            with ui.expansion("Retrieval", icon="tune").classes(
+                "mt-2 text-sm text-gray-500 w-full"
+            ):
+                with ui.column().classes("gap-2 mt-1"):
+                    ui.label("Retrieval Level:").classes(
+                        "text-sm font-semibold text-gray-700"
+                    )
+
+                    _RETRIEVAL_OPTIONS = {
+                        "chunk": "Chunk",
+                        "segment": "Segment",
+                        "document": "Document",
+                    }
+                    retrieval_level_radio = ui.radio(
+                        options=_RETRIEVAL_OPTIONS,
+                        value="chunk",
+                    ).props("inline").classes("text-sm")
+
+                    # Segment count — shown only when "segment" is selected
+                    segment_count_row = ui.row().classes(
+                        "items-center gap-3 hidden"
+                    )
+                    with segment_count_row:
+                        ui.label("Segment Count:").classes(
+                            "text-sm font-semibold text-gray-700 whitespace-nowrap"
+                        )
+                        segment_count_input = ui.number(
+                            value=5,
+                            min=1,
+                            max=50,
+                            step=1,
+                            format="%.0f",
+                        ).props("dense outlined").classes("w-24").tooltip(
+                            "Number of transcript segments to retrieve."
+                        )
+
+                    def _on_retrieval_level(e: object) -> None:
+                        val = getattr(e, "args", e) if not isinstance(e, str) else e
+                        if val == "segment":
+                            segment_count_row.classes(remove="hidden")
+                        else:
+                            segment_count_row.classes(add="hidden")
+
+                    retrieval_level_radio.on("update:model-value", _on_retrieval_level)
 
         # ── Chat scroll area ─────────────────────────────────────────────
         scroll = ui.scroll_area().classes(
@@ -244,14 +257,20 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                 # Show the partial content (may be empty) with a badge so the
                 # user knows the response was never completed.  On the next
                 # fresh query the session continues normally.
+                # Use content_partial if available (periodic flush during streaming)
+                display_content = (
+                    d.get("content")
+                    or getattr(msg, "content_partial", None)
+                    or ""
+                )
                 with messages_col:
                     with ui.chat_message(
                         name="MeetBot",
                         stamp=stamp,
                         sent=False,
                     ).classes("w-full"):
-                        if d.get("content"):
-                            ui.label(d["content"]).classes("whitespace-pre-wrap text-sm")
+                        if display_content:
+                            ui.label(display_content).classes("whitespace-pre-wrap text-sm")
                         ui.badge(
                             "⏳ Generation was in progress when you left — "
                             "answer may be incomplete",
@@ -411,21 +430,35 @@ async def query_page(job_id: str) -> None:  # noqa: C901
             collected_sources: list = []   # all k candidates
             final_sources: list = []        # post-answer filtered subset
 
+            # Streaming persistence: periodically flush partial content to DB
+            from ...utils.persistence import StreamingPersister
+            _persister = StreamingPersister(message_id=_stream_msg_id)
+
             def _run_stream() -> None:
                 from ...services.query_service import QueryService  # local import
 
                 svc = QueryService()
                 try:
-                    _k_val = int(rag_k_input.value or settings.RAG_TOP_K)
-                    _k_clamped = max(1, min(doc_count_max, _k_val))
+                    _k_val = settings.RAG_TOP_K
+
+                    _retrieval_level = retrieval_level_radio.value or "chunk"
+                    _seg_count = None
+                    if _retrieval_level == "segment":
+                        try:
+                            _seg_count = max(1, int(segment_count_input.value or 5))
+                        except (TypeError, ValueError):
+                            _seg_count = 5
+
                     for event in svc.query_stream(
                         question=question,
                         db_dir=job_db_dir,
                         embedding_model=settings.EMBEDDING_MODEL,
                         hf_model=settings.HF_MODEL,
-                        k=_k_clamped,
+                        k=_k_val,
                         llm_mode=selected_mode,
                         abort_event=stop_event,
+                        retrieval_level=_retrieval_level,
+                        segment_count=_seg_count,
                     ):
                         # IMPORTANT: do NOT check stop_event here before the put.
                         # query_stream() already checks abort_event internally and
@@ -506,6 +539,7 @@ async def query_page(job_id: str) -> None:  # noqa: C901
 
                     elif etype == "token":
                         accumulated.append(event.get("data", ""))
+                        _persister.append(event.get("data", ""))
                         answer_label.set_text("".join(accumulated))
                         scroll.scroll_to(percent=1)
 
@@ -516,6 +550,13 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                         # Filtered sources from post-answer embedding comparison
                         final_sources = event.get("filtered_sources") or collected_sources
                         filtering_ok  = event.get("filtering_available", True)
+
+                        # Flush any remaining partial content from the persister
+                        _final_status_p = "stopped" if was_stopped else "completed"
+                        try:
+                            _persister.finalise(_final_status_p)
+                        except Exception:
+                            logger.debug("persister finalise failed", exc_info=True)
 
                         # ── 1. DB save FIRST, before touching any UI element ──
                         # Persisting before DOM mutations means a socket drop
@@ -643,6 +684,11 @@ async def query_page(job_id: str) -> None:  # noqa: C901
                     job_id, len(accumulated),
                 )
                 stop_event.set()
+                # Flush streaming persister as interrupted
+                try:
+                    _persister.finalise("interrupted")
+                except Exception:
+                    logger.debug("persister finalise(interrupted) failed", exc_info=True)
                 if not _message_saved["value"] and _stream_msg_id:
                     partial_text = (
                         "".join(accumulated) + "\n*(generation interrupted)*"

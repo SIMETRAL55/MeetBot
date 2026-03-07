@@ -140,36 +140,36 @@ class MeetBotPipeline:
             Dict with index path and document count
         """
         try:
-            from .services.prepare_docs import PrepareDocsService
-            from .services.indexer import IndexerService
+            import json as _json
+            from .services.rag.indexer import RAGIndexer
 
-            self.logger.info("Building RAG index...")
+            self.logger.info("Building RAG index (multilevel: doc+segment+chunk)...")
 
-            # 1. Prepare documents
-            self.logger.info("  1) Preparing documents...")
-            prepare_svc = PrepareDocsService()
-            docs, prepared_path = prepare_svc.prepare(transcript_json)
-            self.logger.info(f"    ✓ Prepared {len(docs)} documents")
+            # 1. Read transcript JSON segments
+            self.logger.info("  1) Reading transcript segments...")
+            with open(transcript_json, "r", encoding="utf-8") as fh:
+                raw = _json.load(fh)
+            segments = raw if isinstance(raw, list) else raw.get("segments", [])
+            self.logger.info(f"    ✓ Loaded {len(segments)} segments")
 
-            # 2. Build vector index
-            self.logger.info("  2) Building vector index...")
-            indexer_svc = IndexerService()
-            vectorstore = indexer_svc.build_index(
-                str(prepared_path),
+            # 2. Build multilevel vector index (atomic)
+            self.logger.info("  2) Building multilevel vector index...")
+            collection_name = Path(transcript_json).stem
+            db_dir = RAGIndexer.build_multilevel_index_atomic(
+                segments=segments,
                 persist_root=db_root,
+                collection_name=collection_name,
                 embedding_model=embedding_model,
-                collection_name=Path(transcript_json).stem,
-                overwrite=overwrite,
+                device="cpu",
+                job_id=collection_name,
+                version=1,
             )
-            self.logger.info("    ✓ Vector index built")
-
-            db_dir = Path(db_root) / Path(transcript_json).stem
+            self.logger.info("    ✓ Multilevel index built")
             self.logger.info(f"✓ Index saved to {db_dir}")
 
             return {
-                "db_dir": str(db_dir),
-                "prepared_jsonl": str(prepared_path),
-                "n_documents": len(docs),
+                "db_dir": db_dir,
+                "n_documents": len(segments),
             }
 
         except Exception as e:

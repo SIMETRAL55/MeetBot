@@ -20,6 +20,7 @@ from ...db.crud import (
     bulk_update_speaker_name,
     get_segments_for_job,
     flush_segments_to_json,
+    bump_transcript_version,
 )
 from ...db.models import Segment
 
@@ -200,6 +201,7 @@ class TranscriptTable:
                             update_segment_speaker(db, segment.id, name)
                             ui.notify("Speaker renamed", type="positive")
                         flush_segments_to_json(db, self.job_id)
+                        bump_transcript_version(db, self.job_id)
                     except Exception as exc:
                         logger.error(
                             "apply_rename: flush_segments_to_json failed: %s", exc
@@ -248,6 +250,7 @@ class TranscriptTable:
                     try:
                         update_segment_text(db, segment.id, new_text)
                         flush_segments_to_json(db, self.job_id)
+                        bump_transcript_version(db, self.job_id)
                         ui.notify("Text updated and transcript file saved", type="positive")
                     except Exception as exc:
                         logger.error(

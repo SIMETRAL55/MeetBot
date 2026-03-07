@@ -6,26 +6,14 @@ Used when the user edits the transcription in the WebApp and wants queries to
 reflect the corrected text.  Only the Prepare → Index stages are executed; the
 expensive Whisper / Pyannote stages are skipped.
 
-The worker:
-1. Reads the *existing* aligned result JSON (``job.result_json_path``).
-2. Wipes the old Chroma persist directory (prevents stale embeddings).
-3. Re-prepares documents via ``PrepareDocsService``.
-4. Rebuilds the index via ``IndexerService`` (``overwrite=True``).
-5. Reports progress through the shared ``ProgressManager`` so the
-   existing WebSocket subscribers see live updates without any UI changes.
+Uses the RAG pipeline with speaker-aware chunking, atomic swap indexing,
+and transcript versioning.  The canonical transcript is read from the DB
+(reflecting all inline edits), chunked, and indexed atomically so queries
+never see a partially built index.
 
 Entry point
 -----------
 ``run_reindex(job_id: str)`` — call this from the ``JobQueue`` worker thread.
-It mirrors the shape of ``run_pipeline()`` so it can use the same queue.
-
-Jobs in the queue are plain strings.  The queue distinguishes reindex tasks
-from full-pipeline tasks by checking the JobStatus at dequeue time:
-
-    if job.status == JobStatus.REINDEXING:
-        run_reindex(job_id)
-    else:
-        run_pipeline(job_id)
 """
 
 import json
@@ -115,131 +103,7 @@ def run_reindex(job_id: str) -> None:  # noqa: C901
         _stage(0, 0, "Starting reindex...")
         logger.info("run_reindex: job=%s file=%s", job_id[:8], job.original_filename)
 
-        # ── Wipe old vector store ──────────────────────────────────────
-        _stage(5, 5, "Clearing old vector index...")
-        collection_name = job_id[:8]
-        db_root = str(Path(settings.VECTOR_DB_PATH).parent)
-        old_db_dir = Path(db_root) / collection_name
-
-        try:
-            from ..services.query_service import _invalidate_chroma_cache as _inv_pre
-            _inv_pre(job_id)
-        except Exception:
-            pass  # best-effort
-
-        if old_db_dir.exists():
-            try:
-                shutil.rmtree(str(old_db_dir))
-                logger.info(
-                    "run_reindex: removed old index at %s", old_db_dir
-                )
-            except Exception as exc:
-                logger.warning(
-                    "run_reindex: could not remove old index (%s) — continuing",
-                    exc,
-                )
-
-        # ── Cancel check: after clearing index, before embedding-heavy indexing ─
-        cancel_registry.check_and_raise(job_id)
-
-        # ── Prepare documents ─────────────────────────────────────────
-        _stage(10, 10, "Preparing document chunks...")
-
-        from ..services.prepare_docs import PrepareDocsService
-        from ..services.indexer import IndexerService
-
-        prepare_svc = PrepareDocsService()
-        try:
-            docs, prepared_path = prepare_svc.prepare(result_path)
-        except Exception as exc:
-            _fail(f"Document preparation failed: {exc}")
-            return
-
-        _stage(20, 20, f"Prepared {len(docs)} document chunks")
-        logger.info(
-            "run_reindex: prepared %d chunks from %s", len(docs), result_path
-        )
-
-        # ── Build index ───────────────────────────────────────────────
-        indexer_svc = IndexerService()
-        embedding_device = settings.EMBEDDING_DEVICE
-
-        def _index_progress(stage: str, pct: float, msg: str) -> None:
-            # Scale indexer 0→100 to overall 20→95
-            overall = 20 + pct * 0.75
-            _stage(overall, pct, msg)
-
-        def _run_indexer(device: str) -> None:
-            indexer_svc.build_index(
-                str(prepared_path),
-                persist_root=db_root,
-                embedding_model=settings.EMBEDDING_MODEL,
-                collection_name=collection_name,
-                overwrite=True,
-                progress_callback=_index_progress,
-                device=device,
-            )
-
-        try:
-            _run_indexer(embedding_device)
-        except RuntimeError as oom_err:
-            if "out of memory" in str(oom_err).lower() and embedding_device != "cpu":
-                logger.warning(
-                    "run_reindex: GPU OOM on indexing — retrying on CPU"
-                )
-                _stage(20, 5, "GPU OOM — retrying on CPU...")
-                try:
-                    import gc, torch  # noqa: E401
-                    torch.cuda.empty_cache()
-                    gc.collect()
-                except Exception:
-                    pass
-                _run_indexer("cpu")
-            else:
-                raise
-
-        # Clear the chromadb system cache a second time.  build_index returns
-        # a Chroma / PersistentClient object that registers itself in
-        # SharedSystemClient._identifier_to_system.  Clearing it here ensures
-        # the next query creates a clean client that reads from the freshly
-        # written SQLite rather than reusing the build-time connection.
-        try:
-            from ..services.query_service import _invalidate_chroma_cache as _inv_post
-            _inv_post(job_id)
-        except Exception:
-            pass
-
-        # ── Cancel check #2: after indexing, before writing COMPLETED ─────
-        # The API endpoint writes CANCELLED to the DB immediately when the
-        # user clicks "Stop", but the only earlier checkpoint is BEFORE
-        # _run_indexer().  If the cancel flag was set DURING indexing the
-        # first check was already past — this second check catches that
-        # race and prevents overwriting CANCELLED → COMPLETED.
-        cancel_registry.check_and_raise(job_id)
-
-        # ── Update DB ─────────────────────────────────────────────────
-        db_dir = str(old_db_dir)
-        update_job_result(db, job_id, db_dir=db_dir)
-
-        progress_cb("completed", 100, "Reindex complete", 100.0)
-        update_job_status(
-            db,
-            job_id,
-            JobStatus.COMPLETED,
-            progress=100,
-            stage_progress=100,
-            progress_message="Reindex complete",
-            log_line="✅ Reindex complete",
-        )
-        progress_manager.update(
-            job_id,
-            stage="completed",
-            progress=100,
-            message="Reindex complete",
-            stage_progress=100,
-            status="completed",
-        )
-        logger.info("run_reindex: job=%s complete", job_id[:8])
+        _run_reindex_v2(job, db, job_id, _stage, _fail)
 
     except JobCancelledError:
         logger.info("run_reindex: job=%s cancelled", job_id[:8])
@@ -268,6 +132,113 @@ def run_reindex(job_id: str) -> None:  # noqa: C901
         progress_manager.remove(job_id)
         db.close()
         _cleanup_gpu()
+
+
+def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
+    """RAG v2 reindex: DB-canonical transcript → chunker → atomic swap index."""
+    from ..db.crud import (
+        get_segments_for_job,
+        bump_transcript_version,
+        flush_segments_to_json,
+    )
+    from ..services.rag.indexer import RAGIndexer, _invalidate_chroma_cache
+
+    # Bump transcript version
+    _stage(5, 5, "Bumping transcript version...")
+    try:
+        version = bump_transcript_version(db, job_id)
+    except Exception:
+        version = getattr(job, "transcript_version", 1) or 1
+
+    # Flush DB segments to on-disk JSON (keeps file in sync with edits)
+    _stage(8, 8, "Syncing transcript to disk...")
+    try:
+        flush_segments_to_json(db, job_id)
+    except Exception as exc:
+        logger.warning("run_reindex_v2: flush_segments failed: %s", exc)
+
+    # Read canonical transcript from DB segments
+    _stage(10, 10, "Reading canonical transcript from DB...")
+    segments = get_segments_for_job(db, job_id)
+    if not segments:
+        _fail("No transcript segments found in DB")
+        return
+
+    seg_dicts = [s.to_dict() for s in segments]
+    logger.info("run_reindex_v2: %d segments from DB (version=%d)", len(seg_dicts), version)
+
+    # Cancel check before embedding-heavy work
+    cancel_registry.check_and_raise(job_id)
+
+    # Cancel check before embedding-heavy work
+    cancel_registry.check_and_raise(job_id)
+
+    _stage(15, 15, f"Preparing multi-level index for {len(seg_dicts)} segments...")
+    logger.info("run_reindex_v2: building multilevel index for %d segments", len(seg_dicts))
+
+    # Atomic build + swap index (multilevel: doc + segment + chunk)
+    collection_name = job_id[:8]
+    db_root = str(Path(settings.VECTOR_DB_PATH).parent)
+
+    def _index_progress(stage: str, pct: float, msg: str) -> None:
+        overall = 20 + pct * 0.75
+        _stage(overall, pct, msg)
+
+    def _cancel_check() -> None:
+        cancel_registry.check_and_raise(job_id)
+
+    def _run_indexer(device: str) -> str:
+        return RAGIndexer.build_multilevel_index_atomic(
+            segments=seg_dicts,
+            persist_root=db_root,
+            collection_name=collection_name,
+            embedding_model=settings.EMBEDDING_MODEL,
+            device=device,
+            progress_callback=_index_progress,
+            job_id=job_id,
+            version=version,
+            chunk_tokens=settings.CHUNK_TOKENS,
+            chunk_overlap=settings.CHUNK_OVERLAP,
+            cancel_checker=_cancel_check,
+        )
+
+    embedding_device = settings.EMBEDDING_DEVICE
+    try:
+        db_dir = _run_indexer(embedding_device)
+    except RuntimeError as oom_err:
+        if "out of memory" in str(oom_err).lower() and embedding_device != "cpu":
+            logger.warning("run_reindex_v2: GPU OOM — retrying on CPU")
+            _stage(20, 5, "GPU OOM — retrying on CPU...")
+            try:
+                import gc as _gc
+                import torch
+                torch.cuda.empty_cache()
+                _gc.collect()
+            except Exception:
+                pass
+            db_dir = _run_indexer("cpu")
+        else:
+            raise
+
+    # Cancel check after indexing
+    cancel_registry.check_and_raise(job_id)
+
+    # Update DB
+    update_job_result(db, job_id, db_dir=db_dir)
+
+    progress_cb = progress_manager.make_callback(job_id)
+    progress_cb("completed", 100, "Reindex complete (v2)", 100.0)
+    update_job_status(
+        db, job_id, JobStatus.COMPLETED,
+        progress=100, stage_progress=100,
+        progress_message="Reindex complete",
+        log_line="✅ Reindex complete (v2, atomic swap)",
+    )
+    progress_manager.update(
+        job_id, stage="completed", progress=100,
+        message="Reindex complete", stage_progress=100, status="completed",
+    )
+    logger.info("run_reindex_v2: job=%s complete (version=%d)", job_id[:8], version)
 
 
 def _cleanup_gpu() -> None:

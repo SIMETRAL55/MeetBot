@@ -190,6 +190,104 @@ class Settings(BaseSettings):
         ),
     )
 
+    # ── New RAG pipeline settings ────────────────────────────────────────
+    RAG_RECALL_N: int = Field(
+        50,
+        env="RAG_RECALL_N",
+        description=(
+            "Stage-1 ANN recall: how many candidates to fetch from the vector "
+            "store before reranking.  Higher = better recall, slightly slower."
+        ),
+    )
+
+    RAG_MAX_CONTEXT_CHUNKS: int = Field(
+        6,
+        env="RAG_MAX_CONTEXT_CHUNKS",
+        description=(
+            "Maximum number of context chunks to feed to the LLM after "
+            "reranking.  Controls prompt length vs. answer quality."
+        ),
+    )
+
+    CHUNK_TOKENS: int = Field(
+        300,
+        env="CHUNK_TOKENS",
+        description=(
+            "Target chunk size in estimated tokens for transcript chunking. "
+            "Smaller = more precise retrieval; larger = more context per chunk."
+        ),
+    )
+
+    CHUNK_OVERLAP: int = Field(
+        50,
+        env="CHUNK_OVERLAP",
+        description=(
+            "Number of overlap tokens between consecutive chunks to preserve "
+            "context continuity across chunk boundaries."
+        ),
+    )
+
+    RAG_V2_ENABLED: bool = Field(
+        True,
+        env="RAG_V2_ENABLED",
+        description=(
+            "DEPRECATED — always True.  The legacy RAG pipeline has been "
+            "removed.  This field is kept for one release to avoid breaking "
+            "existing .env files that set it.  Will be removed in a future "
+            "version."
+        ),
+    )
+
+    # ── Memory-safe indexing settings ────────────────────────────────────
+    EMBED_BATCH_SIZE: int = Field(
+        16,
+        env="EMBED_BATCH_SIZE",
+        description=(
+            "Number of documents to embed in a single batch during indexing. "
+            "Lower = less peak RAM; higher = faster throughput."
+        ),
+    )
+
+    INDEX_BATCH_PERSIST_CHECKPOINT: int = Field(
+        100,
+        env="INDEX_BATCH_PERSIST_CHECKPOINT",
+        description=(
+            "Write a checkpoint file every N batches during indexing so "
+            "progress can be inspected (and potentially resumed)."
+        ),
+    )
+
+    MEMORY_WATCH_ENABLED: bool = Field(
+        True,
+        env="MEMORY_WATCH_ENABLED",
+        description="Enable psutil-based memory monitoring during indexing.",
+    )
+
+    MEMORY_WATCH_THRESHOLD_PCT: float = Field(
+        0.85,
+        env="MEMORY_WATCH_THRESHOLD_PCT",
+        description=(
+            "Fraction of total system RAM (0.0–1.0). If usage exceeds this "
+            "during embedding, batch size is halved and the batch retried."
+        ),
+    )
+
+    RAG_MEMORY_SAFE_MODE: bool = Field(
+        True,
+        env="RAG_MEMORY_SAFE_MODE",
+        description=(
+            "Master toggle for memory-safe indexing (batched embedding, "
+            "streamed inserts, aggressive gc). Set to False to revert to "
+            "single-call indexing for debugging."
+        ),
+    )
+
+    TEMP_DIR: str = Field(
+        "./temp",
+        env="TEMP_DIR",
+        description="Directory for temporary files (JSONL chunks, checkpoints).",
+    )
+
     # =========================================================================
     # Device & Performance Configuration
     # =========================================================================
@@ -200,7 +298,7 @@ class Settings(BaseSettings):
     )
 
     EMBEDDING_DEVICE: str = Field(
-        "cpu",
+        "cuda",
         env="EMBEDDING_DEVICE",
         description="Device for embedding model ('cuda' or 'cpu')",
     )

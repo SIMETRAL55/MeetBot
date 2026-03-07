@@ -112,6 +112,13 @@ def run_pipeline(job_id: str) -> None:
             json.dump(transcription, f, indent=2, ensure_ascii=False)
         update_job_result(db, job_id, transcription_json_path=str(trans_result_path))
 
+        # ── Memory cleanup between stages ───────────────────────────────
+        del transcriber_svc, transcriber_adapter
+        from ..utils.memory import cleanup_memory, log_memory_usage
+        cleanup_memory("post-transcription")
+        if settings.MEMORY_WATCH_ENABLED:
+            log_memory_usage("post-transcription")
+
         # ── Cancel check: between Transcription and Diarization ────────────
         cancel_registry.check_and_raise(job_id)
 
@@ -147,6 +154,12 @@ def run_pipeline(job_id: str) -> None:
         with open(diar_result_path, "w", encoding="utf-8") as f:
             json.dump(diarization, f, indent=2, ensure_ascii=False)
         update_job_result(db, job_id, diarization_json_path=str(diar_result_path))
+
+        # ── Memory cleanup between stages ───────────────────────────────
+        del diarizer_svc
+        cleanup_memory("post-diarization")
+        if settings.MEMORY_WATCH_ENABLED:
+            log_memory_usage("post-diarization")
 
         # ── Cancel check: between Diarization and Alignment ───────────────
         cancel_registry.check_and_raise(job_id)
@@ -191,6 +204,12 @@ def run_pipeline(job_id: str) -> None:
         _stage_update(db, job_id, JobStatus.ALIGNING, progress_cb,
                       overall=75, stage=100, msg="Transcript saved")
 
+        # ── Memory cleanup: free alignment intermediates ──────────────────
+        del aligner, aligned, transcription, diarization
+        cleanup_memory("post-alignment")
+        if settings.MEMORY_WATCH_ENABLED:
+            log_memory_usage("post-alignment")
+
         # ── Cancel check: between Alignment and Indexing ──────────────────
         cancel_registry.check_and_raise(job_id)
 
@@ -200,15 +219,20 @@ def run_pipeline(job_id: str) -> None:
 
         # Indexing is FATAL — if it cannot complete on any device the job is
         # marked failed so the UI never shows a half-broken "ready" state.
-        from ..services.prepare_docs import PrepareDocsService
-        from ..services.indexer import IndexerService
+        from ..db.crud import get_segments_for_job
+        from ..services.rag.indexer import RAGIndexer
 
-        prepare_svc = PrepareDocsService()
-        docs, prepared_path = prepare_svc.prepare(str(result_path))
+        # Read canonical segments from DB (inserted by the aligner stage)
+        segments = get_segments_for_job(db, job_id)
+        if not segments:
+            raise RuntimeError("No transcript segments in DB — cannot build index")
+        seg_dicts = [s.to_dict() for s in segments]
+        version = getattr(segments[0], "transcript_version", 1) if segments else 1
+
         _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
-                      overall=78, stage=10, msg=f"Prepared {len(docs)} document chunks")
+                      overall=78, stage=10,
+                      msg=f"Preparing multi-level index for {len(seg_dicts)} segments...")
 
-        indexer_svc = IndexerService()
         db_root = str(Path(settings.VECTOR_DB_PATH).parent)
         collection_name = job_id[:8]
         embedding_device = settings.EMBEDDING_DEVICE  # "cpu" by default
@@ -219,20 +243,27 @@ def run_pipeline(job_id: str) -> None:
             _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
                           overall=overall, stage=10 + pct * 0.9, msg=msg)
 
-        def _run_indexer(device: str) -> None:
-            """Call IndexerService.build_index() with the given device."""
-            indexer_svc.build_index(
-                str(prepared_path),
+        def _cancel_check() -> None:
+            cancel_registry.check_and_raise(job_id)
+
+        def _run_indexer(device: str) -> str:
+            """Build the multi-level vector index atomically."""
+            return RAGIndexer.build_multilevel_index_atomic(
+                segments=seg_dicts,
                 persist_root=db_root,
-                embedding_model=settings.EMBEDDING_MODEL,
                 collection_name=collection_name,
-                overwrite=True,
-                progress_callback=index_progress,
+                embedding_model=settings.EMBEDDING_MODEL,
                 device=device,
+                progress_callback=index_progress,
+                job_id=job_id,
+                version=version,
+                chunk_tokens=settings.CHUNK_TOKENS,
+                chunk_overlap=settings.CHUNK_OVERLAP,
+                cancel_checker=_cancel_check,
             )
 
         try:
-            _run_indexer(embedding_device)
+            db_dir = _run_indexer(embedding_device)
         except RuntimeError as oom_err:
             _is_oom = "out of memory" in str(oom_err).lower()
             if _is_oom and embedding_device != "cpu":
@@ -252,14 +283,15 @@ def run_pipeline(job_id: str) -> None:
                 except Exception:
                     pass
                 # Retry on CPU — if this also fails, propagate to _fail_job
-                _run_indexer("cpu")
+                db_dir = _run_indexer("cpu")
                 logger.info(f"Job {job_id[:8]}: CPU indexing successful")
             else:
                 raise  # Not OOM or already on CPU → propagate → _fail_job
 
-        db_dir = str(Path(db_root) / collection_name)
         update_job_result(db, job_id, db_dir=db_dir)
-        done_msg = f"Indexing done — {len(docs)} documents indexed"
+        doc_count = RAGIndexer.get_doc_count(db_dir)
+        logger.info(f"Job {job_id[:8]}: Indexing complete. Documents indexed (chunk level): {doc_count}")
+        done_msg = f"Indexing done — {doc_count} chunks indexed ({len(seg_dicts)} segments)"
         logger.info(f"Job {job_id[:8]}: {done_msg}")
         _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
                       overall=95, stage=100, msg=done_msg)

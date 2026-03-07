@@ -1,4 +1,17 @@
-"""Document preparation service for RAG encoding."""
+"""Document preparation service for RAG encoding.
+
+.. deprecated::
+    This module is superseded by ``services.rag.chunker.Chunker`` which
+    provides speaker-aware token-level chunking with overlap.  No production
+    code paths import this module any longer.  It is retained only for
+    reference and will be removed in a future release.
+"""
+import warnings as _warnings
+_warnings.warn(
+    "meetbot.services.prepare_docs is deprecated — use meetbot.services.rag.chunker instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import json
 import logging

@@ -10,6 +10,15 @@ Pass ``llm_mode`` to :meth:`QueryService.query` to choose the generation backend
 This mirrors the ``--use-local-llm`` flag in the CLI: only the final generation
 step changes; retrieval, embedding and context-formatting are identical for both
 modes.
+
+RAG pipeline
+------------
+``query_stream`` uses a two-stage retrieval pipeline:
+
+1. Stage 1 — ANN recall: fetch ``RAG_RECALL_N`` candidates from Chroma.
+2. Stage 2 — MMR rerank: select ``RAG_MAX_CONTEXT_CHUNKS`` diverse chunks.
+3. Generate answer with selected context.
+4. Post-answer: filter sources by answer-embedding similarity.
 """
 
 import logging
@@ -930,103 +939,155 @@ class QueryService:
         k: int = 4,
         llm_mode: LLMMode = "local",
         abort_event: Optional[threading.Event] = None,
+        retrieval_level: Optional[str] = None,
+        segment_count: Optional[int] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
-        RAG query with streaming LLM generation.
+        RAG query with two-stage retrieval, MMR reranking, and
+        answer-aware source selection.
 
         This is a **synchronous generator** — run it in a background thread
         (e.g. via ``asyncio.to_thread``) to avoid blocking the asyncio event
         loop.
 
+        Pipeline:
+        1. ANN recall (top-N from Chroma)
+        2. MMR rerank to select diverse context chunks
+        3. Stream LLM generation
+        4. Answer-embedding source filtering
+
         Emits a sequence of typed event dicts:
 
-        1. ``{"type": "sources", "data": [...]}``
-           Emitted immediately after retrieval, before generation begins.
-           Each source is a dict with speaker, start, end, text, audio_file.
-
-        2. ``{"type": "token", "data": "<str>"}``
-           One per generated token/sub-word.  Concatenate all token data to
-           reconstruct the full answer.
-
-        3. ``{"type": "done", "llm_backend": "local"|"hf", "full_answer": "..."}``
-           Emitted when generation is complete.
-
-        On error, emits ``{"type": "error", "data": "<message>"}`` and stops.
+        - ``{"type": "sources", "data": [...]}``  — initial candidates
+        - ``{"type": "token", "data": "..."}``    — streaming tokens
+        - ``{"type": "done", ...}``               — final result + filtered sources
+        - ``{"type": "error", "data": "..."}``    — on failure
 
         Args:
-            question: User question string.
-            db_dir: Path to ChromaDB vector store.
-            embedding_model: Embedding model for retrieval.
-            hf_model: HuggingFace model ID (used only when llm_mode="hf").
-            k: Number of documents to retrieve.
-            llm_mode: "local" | "hf"
-
-        Yields:
-            dict: Typed event dicts as described above.
+            retrieval_level: Explicit retrieval level chosen by the user.
+                Valid values: ``"document"``, ``"segment"``, ``"chunk"``.
+                Defaults to ``"chunk"`` when not provided.
+            segment_count: Number of segments to retrieve when
+                ``retrieval_level="segment"``.  Defaults to ``k`` when not set.
         """
-        # ── Step 1: Retrieval ──────────────────────────────────────────────
+        from ..config import settings as _s
+        from .rag.retriever import Retriever
+        from .rag.reranker import Reranker
+        from .rag.selector import Selector
+
+        # ── Determine retrieval level ─────────────────────────────────────
+        # Use explicit UI-provided level; default to "chunk" for backward
+        # compatibility when the parameter is omitted.
+        level = retrieval_level if retrieval_level in ("document", "segment", "chunk") else "chunk"
+        logger.info("query_stream: retrieval_level=%r for query=%r", level, question[:60])
+
+        # Level-adaptive recall parameters
+        if level == "document":
+            recall_n = 1       # one document-level vector is sufficient
+            max_context = 1
+        elif level == "segment":
+            seg_k = segment_count if segment_count and segment_count > 0 else k
+            recall_n = max(seg_k, _s.RAG_RECALL_N)
+            max_context = seg_k
+        else:  # "chunk"
+            recall_n = max(k, _s.RAG_RECALL_N)
+            max_context = min(k, _s.RAG_MAX_CONTEXT_CHUNKS)
+
+        # ── Stage 1: ANN Recall ──────────────────────────────────────────
         try:
-            logger.info("query_stream: loading vectorstore from %s", db_dir)
-            vectorstore = self._load_vectorstore(db_dir, embedding_model)
-            docs_with_scores = self._retrieve_with_scores(vectorstore, question, k=k)
+            logger.info(
+                "query_stream: recalling top-%d from %s (level=%r)",
+                recall_n, db_dir, level,
+            )
+            retriever = Retriever(embedding_model, device="cpu")
+            candidates = retriever.recall(
+                query=question, db_dir=db_dir, top_n=recall_n,
+                level=level,
+            )
         except Exception as exc:
-            logger.error("query_stream retrieval failed: %s", exc)
+            logger.error("query_stream recall failed: %s", exc)
             yield {"type": "error", "data": f"Retrieval failed: {exc}"}
             return
 
-        # ── Step 2: Process documents & build context ──────────────────────
-        # docs_with_scores is List[(document, raw_distance)]; lower = better.
-        context: List[Tuple[str, Dict[str, Any]]] = []
-        raw_scores: List[float] = []
-        for doc, score in docs_with_scores:
-            text     = getattr(doc, "page_content", doc)
-            metadata = getattr(doc, "metadata", {})
-            context.append((text, metadata))
-            raw_scores.append(score)
+        if not candidates:
+            yield {"type": "error", "data": "No documents found in vector store"}
+            return
 
-        logger.info(
-            "query_stream: retrieved %d candidates, raw scores: %s",
-            len(context),
-            [round(s, 4) for s in raw_scores],
-        )
-
-        # All k candidates as dicts — full text, metadata, retrieval score.
+        # Build candidate source dicts for the UI
         candidate_sources = [
             {
-                "text":          text,
-                "audio_file":    m.get("audio_file"),
-                "speaker":       m.get("speaker"),
-                "start":         m.get("start"),
-                "end":           m.get("end"),
-                "relevance_pct": self._score_to_relevance_pct(raw_scores[i]),
+                "text":          c.text,
+                "audio_file":    c.metadata.get("audio_file", ""),
+                "speaker":       c.speaker,
+                "start":         c.start,
+                "end":           c.end,
+                "relevance_pct": retriever.score_to_relevance_pct(c.distance),
             }
-            for i, (text, m) in enumerate(context)
+            for c in candidates
         ]
 
-        # Emit candidates immediately so the UI can show them while streaming.
-        yield {"type": "sources", "data": candidate_sources}
-        logger.info("query_stream: emitted %d candidate sources", len(candidate_sources))
+        # ── Stage 2: MMR Rerank ──────────────────────────────────────────
+        # For document-level retrieval, skip MMR — there is exactly one candidate
+        if level == "document":
+            context_sources = candidate_sources[:max_context]
+            logger.info("query_stream: document-level retrieval → skipping MMR, using 1 doc")
+        else:
+            try:
+                # Get query embedding for MMR
+                embedder = _get_embedding_model(embedding_model, device="cpu")
+                query_emb_list = embedder.embed_documents([question])
+                import numpy as np
+                query_emb = np.array(query_emb_list[0], dtype=np.float32)
 
-        # ── Step 3: Build prompt ───────────────────────────────────────────
+                # Get candidate embeddings
+                cand_texts = [c.text for c in candidates]
+                cand_emb_list = embedder.embed_documents(cand_texts)
+                cand_embs = np.array(cand_emb_list, dtype=np.float32)
+
+                reranker = Reranker(lambda_=0.7)
+                selected_indices = reranker.mmr_select(
+                    query_embedding=query_emb,
+                    candidate_embeddings=cand_embs,
+                    candidate_texts=cand_texts,
+                    k=max_context * 3,  # select wider pool, then trim
+                )
+
+                # Take top max_context from MMR-selected
+                context_indices = selected_indices[:max_context]
+                context_sources = [candidate_sources[i] for i in context_indices]
+
+                logger.info(
+                    "query_stream: MMR selected %d/%d, using %d for context",
+                    len(selected_indices), len(candidates), len(context_indices),
+                )
+            except Exception as exc:
+                logger.warning(
+                    "query_stream: MMR reranking failed (%s), using top-k fallback",
+                    exc,
+                )
+                context_sources = candidate_sources[:max_context]
+
+        # Emit all candidates (UI shows them in a collapsible area)
+        yield {"type": "sources", "data": candidate_sources}
+
+        # ── Stage 3: Build Prompt & Stream ───────────────────────────────
         context_text = "\n\n---\n\n".join(
-            f"[{m.get('audio_file')} {m.get('speaker')} "
-            f"{m.get('start', '?')}-{m.get('end', '?')}] {txt}"
-            for txt, m in context
+            f"[{s.get('audio_file', '')} {s.get('speaker', '?')} "
+            f"{s.get('start', '?')}-{s.get('end', '?')}] {s.get('text', '')}"
+            for s in context_sources
         )
-        system_msg  = (
+
+        system_msg = (
             "You are a helpful assistant. Answer the user's question using only "
             "the provided context. If the answer is not in the context, say so."
         )
         user_content = f"{context_text}\n\nQuestion: {question}"
-        prompt       = f"[INST] {system_msg}\n\n{user_content} [/INST]"
+        prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
 
         messages = [
             {"role": "system", "content": system_msg},
             {"role": "user",   "content": user_content},
         ]
-
-        # ── Step 4: Stream generation ──────────────────────────────────────
-        from ..config import settings as _s
 
         full_answer = ""
         stopped = False
@@ -1040,55 +1101,50 @@ class QueryService:
                     temperature=_s.LOCAL_LLM_TEMPERATURE,
                 )
             else:
-                logger.info("query_stream: using HuggingFace Inference (model=%s)", hf_model)
+                logger.info(
+                    "query_stream: using HF Inference (model=%s)", hf_model
+                )
                 hf_adapter = _get_hf_adapter(hf_model)
-                # Build flat prompt for text_generation endpoint
                 hf_prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
                 token_iter = hf_adapter.generate_stream(prompt=hf_prompt)
 
             for token in token_iter:
-                # Cooperative abort check between tokens
                 if abort_event is not None and abort_event.is_set():
                     stopped = True
                     break
                 full_answer += token
                 yield {"type": "token", "data": token}
 
-        except RuntimeError as exc:
-            err_str = str(exc)
-            logger.error("query_stream generation error: %s", err_str)
-            yield {"type": "error", "data": err_str}
-            return
         except Exception as exc:
-            logger.error("query_stream unexpected error: %s", exc)
-            yield {"type": "error", "data": f"Generation failed: {exc}"}
+            logger.error("query_stream generation error: %s", exc)
+            yield {"type": "error", "data": str(exc)}
             return
 
-        # ── Step 5: Post-answer source filtering ──────────────────────────
-        # Compute answer-embedding similarity against candidates so only
-        # genuinely relevant chunks are surfaced to the user.  Runs in the
-        # same background thread (after all tokens are streamed) so it never
-        # delays the streaming UX.
-        answer_for_filter = full_answer.strip() if not stopped else full_answer[:1000].strip()
-        filtered_sources, filtering_ok = self._filter_sources_by_answer_similarity(
-            answer_text=answer_for_filter,
-            candidates=candidate_sources,
-            embedding_model=embedding_model,
+        # ── Stage 4: Answer-Aware Source Selection ───────────────────────
+        answer_for_filter = (
+            full_answer.strip() if not stopped else full_answer[:1000].strip()
+        )
+        selector = Selector(
             threshold=_s.SOURCE_SIM_THRESHOLD,
             max_return=_s.SOURCE_MAX_RETURN,
         )
+        filtered_sources, filtering_ok = selector.filter_by_answer_similarity(
+            answer_text=answer_for_filter,
+            candidates=candidate_sources,
+            embedding_model=embedding_model,
+        )
+
         logger.info(
-            "query_stream: final selected sources: %d/%d  (filtering_available=%s)",
-            len(filtered_sources),
-            len(candidate_sources),
-            filtering_ok,
+            "query_stream: final sources: %d/%d (filtering=%s)",
+            len(filtered_sources), len(candidate_sources), filtering_ok,
         )
 
         yield {
-            "type":                  "done",
-            "llm_backend":           llm_mode,
-            "full_answer":           full_answer,
-            "stopped":               stopped,
-            "filtered_sources":      filtered_sources,
-            "filtering_available":   filtering_ok,
+            "type":                "done",
+            "llm_backend":         llm_mode,
+            "full_answer":         full_answer,
+            "stopped":             stopped,
+            "filtered_sources":    filtered_sources,
+            "filtering_available": filtering_ok,
+            "retrieval_level":     level,
         }

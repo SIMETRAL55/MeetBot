@@ -1,4 +1,17 @@
-"""Vector indexing service for RAG document storage."""
+"""Vector indexing service for RAG document storage.
+
+.. deprecated::
+    This module is superseded by ``services.rag.indexer.RAGIndexer`` which
+    provides atomic-swap indexing and speaker-aware chunking.  No production
+    code paths import this module any longer.  It is retained only for
+    reference and will be removed in a future release.
+"""
+import warnings as _warnings
+_warnings.warn(
+    "meetbot.services.indexer is deprecated — use meetbot.services.rag.indexer instead",
+    DeprecationWarning,
+    stacklevel=2,
+)
 
 import hashlib
 import json

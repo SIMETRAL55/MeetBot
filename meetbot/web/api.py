@@ -463,7 +463,31 @@ async def api_job_restart(job_id: str) -> JSONResponse:
         from ..workers.cancel import cancel_registry
         cancel_registry.clear(job_id)
 
-        from ..db.crud import update_job_status, get_job as _get_job
+        # ── Clean derived artifacts to prevent duplication on restart ───
+        from ..db.crud import (
+            update_job_status,
+            get_job as _get_job,
+            delete_segments_for_job,
+        )
+
+        # 1. Delete stale segment rows so the pipeline re-inserts cleanly
+        deleted_segs = delete_segments_for_job(db, job_id)
+        if deleted_segs:
+            logger.info(
+                "api_job_restart: cleared %d stale segments for job %s",
+                deleted_segs, job_id[:8],
+            )
+
+        # 2. Remove temp JSONL / embedding intermediates
+        import shutil
+        from pathlib import Path as _P
+        from ..config import settings
+
+        _temp_job_dir = _P(settings.TEMP_DIR) / job_id
+        if _temp_job_dir.exists():
+            shutil.rmtree(str(_temp_job_dir), ignore_errors=True)
+            logger.debug("api_job_restart: removed temp dir %s", _temp_job_dir)
+
         update_job_status(
             db, job_id, JobStatus.PENDING,
             progress=0,

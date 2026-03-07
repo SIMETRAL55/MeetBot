@@ -147,26 +147,29 @@ def cmd_index(args):
     logger.info("Building vector index...")
 
     try:
-        from .services.prepare_docs import PrepareDocsService
-        from .services.indexer import IndexerService
+        import json as _json
+        from .services.rag.indexer import RAGIndexer
 
-        # Prepare documents
-        logger.info("1) Preparing documents...")
-        prepare_svc = PrepareDocsService()
-        docs, prepared_path = prepare_svc.prepare(args.transcript_json)
-        logger.info(f"  ✓ Prepared {len(docs)} documents")
+        # 1. Read transcript JSON
+        logger.info("1) Reading transcript segments...")
+        with open(args.transcript_json, "r", encoding="utf-8") as fh:
+            raw = _json.load(fh)
+        segments = raw if isinstance(raw, list) else raw.get("segments", [])
+        logger.info(f"  ✓ Loaded {len(segments)} segments")
 
-        # Build vector index
-        logger.info("2) Building vector index...")
-        indexer_svc = IndexerService()
-        indexer_svc.build_index(
-            str(prepared_path),
+        # 2. Build multilevel vector index (atomic)
+        logger.info("2) Building multilevel vector index (doc+segment+chunk)...")
+        collection_name = Path(args.transcript_json).stem
+        db_dir = RAGIndexer.build_multilevel_index_atomic(
+            segments=segments,
             persist_root=args.db_root,
+            collection_name=collection_name,
             embedding_model=args.embedding_model,
-            overwrite=args.overwrite,
+            device="cpu",
+            job_id=collection_name,
+            version=1,
         )
 
-        db_dir = Path(args.db_root) / Path(args.transcript_json).stem
         logger.info(f"✓ Index saved to {db_dir}")
         print("=" * 60)
         print("INDEXING COMPLETED SUCCESSFULLY")
@@ -309,7 +312,6 @@ def main():
     index_parser.add_argument("--db-root", default="db", help="Root directory for vector databases")
     index_parser.add_argument("--embedding-model", default="./models/sarashina-embedding-v1-1b",
                              help="Embedding model name/path")
-    index_parser.add_argument("--overwrite", action="store_true", help="Force rebuild if exists")
     index_parser.add_argument("--log-level", default="INFO")
     index_parser.set_defaults(func=cmd_index)
 
