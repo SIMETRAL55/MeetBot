@@ -266,7 +266,7 @@ class IndexerService:
 
                     if progress_callback:
                         progress_callback("indexing", 50, "Loading vector database (chromadb)...")
-                    client = chromadb.PersistentClient(path=str(persist_dir))
+                    client = chromadb.PersistentClient(path=str(persist_dir), settings=chromadb.Settings(anonymized_telemetry=False))
                     collection = client.get_collection(collection_name)
                     logger.info("✓ Loaded existing index via chromadb")
                     if progress_callback:
@@ -391,7 +391,7 @@ class IndexerService:
 
                 # Create chromadb index
                 persist_dir.mkdir(parents=True, exist_ok=True)
-                client = chromadb.PersistentClient(path=str(persist_dir))
+                client = chromadb.PersistentClient(path=str(persist_dir), settings=chromadb.Settings(anonymized_telemetry=False))
 
                 # Create or get collection
                 try:

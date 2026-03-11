@@ -147,8 +147,13 @@ def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
     _stage(5, 5, "Bumping transcript version...")
     try:
         version = bump_transcript_version(db, job_id)
-    except Exception:
-        version = getattr(job, "transcript_version", 1) or 1
+    except Exception as _exc:
+        logger.warning("run_reindex_v2: bump_transcript_version failed: %s", _exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        version = getattr(job, "transcript_version", None) or 1
 
     # Flush DB segments to on-disk JSON (keeps file in sync with edits)
     _stage(8, 8, "Syncing transcript to disk...")
@@ -156,19 +161,53 @@ def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
         flush_segments_to_json(db, job_id)
     except Exception as exc:
         logger.warning("run_reindex_v2: flush_segments failed: %s", exc)
+        try:
+            db.rollback()
+        except Exception:
+            pass
 
     # Read canonical transcript from DB segments
     _stage(10, 10, "Reading canonical transcript from DB...")
     segments = get_segments_for_job(db, job_id)
     if not segments:
-        _fail("No transcript segments found in DB")
+        # Fallback: re-populate segments from the on-disk aligned result JSON.
+        # This handles jobs processed before DB segment storage was introduced,
+        # or cases where the segments table was cleared.
+        _stage(10, 10, "No DB segments — loading from result JSON...")
+        result_json_path = job.result_json_path
+        if result_json_path and Path(result_json_path).exists():
+            try:
+                import json as _json
+                with open(result_json_path, "r", encoding="utf-8") as _fh:
+                    _result = _json.load(_fh)
+                raw_segs = _result.get("segments", [])
+                if not raw_segs:
+                    _fail("No segments in result JSON and none in DB")
+                    return
+                from ..db.crud import create_segments_from_aligned
+                create_segments_from_aligned(db, job_id, raw_segs)
+                segments = get_segments_for_job(db, job_id)
+                logger.info(
+                    "run_reindex_v2: loaded %d segments from result JSON for job %s",
+                    len(segments), job_id[:8],
+                )
+            except Exception as exc:
+                _fail(
+                    f"No transcript segments in DB, and failed to load from result JSON: {exc}"
+                )
+                return
+        else:
+            _fail(
+                "No transcript segments found in DB and no result JSON on disk. "
+                "The job may need to be re-processed from scratch."
+            )
+            return
+    if not segments:
+        _fail("Could not recover transcript segments — please re-process the job")
         return
 
     seg_dicts = [s.to_dict() for s in segments]
     logger.info("run_reindex_v2: %d segments from DB (version=%d)", len(seg_dicts), version)
-
-    # Cancel check before embedding-heavy work
-    cancel_registry.check_and_raise(job_id)
 
     # Cancel check before embedding-heavy work
     cancel_registry.check_and_raise(job_id)

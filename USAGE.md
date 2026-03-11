@@ -23,6 +23,10 @@ MeetBot ships with a **production-grade RAG pipeline** featuring:
 
 ---
 
+source ~/.nvm/nvm.sh && nvm use 20
+npm run dev
+
+
 ## Configuration
 
 All settings can be set via environment variables or directly in

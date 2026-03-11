@@ -240,7 +240,12 @@ class Settings(BaseSettings):
 
     # ── Memory-safe indexing settings ────────────────────────────────────
     EMBED_BATCH_SIZE: int = Field(
-        16,
+        # Default 8 (was 16).  The sarashina-embedding-v1-1b model (1.1 B
+        # params, ~4 GB RAM on CPU) creates large activation tensors during
+        # each forward pass.  Batch-16 can push a 16 GB machine into swap;
+        # batch-8 keeps peak usage bounded while still being efficient.
+        # Increase via EMBED_BATCH_SIZE env var on machines with >32 GB RAM.
+        8,
         env="EMBED_BATCH_SIZE",
         description=(
             "Number of documents to embed in a single batch during indexing. "

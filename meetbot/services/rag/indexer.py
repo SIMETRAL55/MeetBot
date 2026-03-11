@@ -266,7 +266,13 @@ class RAGIndexer:
         import chromadb
 
         Path(persist_dir).mkdir(parents=True, exist_ok=True)
-        client = chromadb.PersistentClient(path=persist_dir)
+        # Disable telemetry per-client as a belt-and-suspenders measure
+        # (the process-level env var in main.py is the primary control).
+        _chroma_settings = chromadb.Settings(anonymized_telemetry=False)
+        client = chromadb.PersistentClient(
+            path=persist_dir,
+            settings=_chroma_settings,
+        )
         try:
             client.delete_collection(collection_name)
         except Exception:
@@ -465,7 +471,8 @@ class RAGIndexer:
             embeddings = sbert.encode(texts, batch_size=batch_size, convert_to_numpy=True)
 
             Path(persist_dir).mkdir(parents=True, exist_ok=True)
-            client = chromadb.PersistentClient(path=persist_dir)
+            _settings = chromadb.Settings(anonymized_telemetry=False)
+            client = chromadb.PersistentClient(path=persist_dir, settings=_settings)
 
             try:
                 collection = client.get_collection(collection_name)
@@ -755,7 +762,8 @@ class RAGIndexer:
             return 0
         try:
             import chromadb
-            client = chromadb.PersistentClient(path=str(db_path))
+            _settings = chromadb.Settings(anonymized_telemetry=False)
+            client = chromadb.PersistentClient(path=str(db_path), settings=_settings)
             collection = client.get_collection(db_path.name)
             # Try chunk-level filter first
             try:

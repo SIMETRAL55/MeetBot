@@ -52,13 +52,17 @@ from ..workers.progress import progress_manager
 
 logger = logging.getLogger(__name__)
 
-# Stages that indicate the job is still running
+# Stages that indicate the job is still running.
+# REINDEXING must be included — omitting it caused the WS handler to
+# immediately read the DB, see status=reindexing, classify it as
+# non-active, and send status="failed" before the worker even started.
 ACTIVE_STATUSES = {
     JobStatus.PENDING,
     JobStatus.TRANSCRIBING,
     JobStatus.DIARIZING,
     JobStatus.ALIGNING,
     JobStatus.INDEXING,
+    JobStatus.REINDEXING,
 }
 
 
@@ -118,7 +122,9 @@ async def ws_job_progress(websocket: WebSocket, job_id: str) -> None:
 
     # ── 2. Already finished — send snapshot and close ───────────────────
     if not is_active:
-        snapshot["status"] = "completed" if job_status_val == "completed" else "failed"
+        # Map terminal statuses: anything that is not "completed" is "failed"
+        # (cancelled, reindexing-failed, etc.) so the UI knows the job stopped.
+        snapshot["status"] = "completed" if job_status_val == "completed" else job_status_val
         await websocket.send_text(json.dumps(snapshot))
         await websocket.close(code=4005)
         logger.info(f"WS 4005: job {job_id[:8]} already {job_status_val}")

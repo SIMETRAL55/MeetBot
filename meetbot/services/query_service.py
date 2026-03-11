@@ -242,7 +242,7 @@ class QueryService:
             import chromadb
 
             logger.debug("Falling back to chromadb direct API...")
-            client = chromadb.PersistentClient(path=db_dir)
+            client = chromadb.PersistentClient(path=db_dir, settings=chromadb.Settings(anonymized_telemetry=False))
             collection = client.get_collection(collection_name)
             logger.info(f"✓ Loaded vectorstore via chromadb from {db_dir}")
             return {"chroma_client": client, "collection": collection}
@@ -335,7 +335,7 @@ class QueryService:
             return 0
         try:
             import chromadb
-            client = chromadb.PersistentClient(path=str(db_path))
+            client = chromadb.PersistentClient(path=str(db_path), settings=chromadb.Settings(anonymized_telemetry=False))
             collection = client.get_collection(db_path.name)
             count = collection.count()
             logger.debug("count_documents(%s) = %d", db_path.name, count)

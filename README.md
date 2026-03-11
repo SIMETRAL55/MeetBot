@@ -40,8 +40,8 @@ MeetBot is a self-hosted meeting-intelligence assistant with the following capab
 - **Persistent chat history** — Per-job conversation history in SQLite
 - **Transcript editing and reindexing** — Edit speakers/text in the UI; rebuild the index instantly
 - **Download outputs** — Aligned JSON, raw Whisper output, diarization JSON
-- **Web UI** — NiceGUI-based interface with real-time progress
-- **REST + WebSocket API** — All core operations exposed as machine-readable endpoints
+- **Web UI** — Modern, responsive Next.js SPA frontend architecture with Tailwind CSS
+- **REST + WebSocket API** — All core operations exposed as machine-readable endpoints from a Python FastAPI backend
 - **CLI** — Batch-processing command-line interface
 
 ---
@@ -112,39 +112,27 @@ MeetBot/
 │   │       ├── selector.py    Context window selection after reranking
 │   │       ├── summarizer.py  Answer-embedding source filtering
 │   │       └── intent.py      RetrievalLevel type definitions
+│   │       └── intent.py      RetrievalLevel type definitions
 │   ├── workers/               Background job processing
-│   │   ├── queue.py           Single-worker FIFO job queue (threading.Queue)
-│   │   ├── pipeline_worker.py Full pipeline orchestrator (transcribe → index)
-│   │   ├── reindex_worker.py  Index-only rebuild (skips transcription)
-│   │   ├── cancel.py          Cooperative cancel registry (inter-stage boundary checks)
-│   │   └── progress.py        Thread-safe progress manager (broadcasts to WebSockets)
-│   ├── web/                   NiceGUI web application
-│   │   ├── main.py            App initialisation, route registration, startup/shutdown
-│   │   ├── pages/             UI pages: login, dashboard, upload, job detail, query
-│   │   ├── components/        Shared UI components (header/nav)
-│   │   ├── api.py             FastAPI REST endpoints
+│   ├── web/                   Legacy NiceGUI app & New FastAPI Backend
+│   │   ├── main.py            App initialisation, CORS config, and route registration
+│   │   ├── api.py             FastAPI REST endpoints for the Next.js frontend
 │   │   ├── ws.py              Job-progress WebSocket (/ws/jobs/{id})
-│   │   ├── ws_chat.py         Streaming RAG chat WebSocket (/ws/chat/{id})
-│   │   └── auth.py            Session-based authentication helpers
+│   │   └── ws_chat.py         Streaming RAG chat WebSocket (/ws/chat/{id})
 │   ├── db/                    Data layer
-│   │   ├── models.py          SQLAlchemy models (User, Job, Segment, ChatSession, ChatMessage)
-│   │   ├── crud.py            CRUD helpers (segment deletion is idempotent on restart)
-│   │   └── database.py        Engine factory, session factory, migration helpers
 │   ├── utils/                 Utilities
-│   │   ├── audio.py           WAV conversion, silence-based chunking for large files
-│   │   └── memory.py          psutil memory monitoring, batch helpers
 │   ├── cli.py                 Command-line entry point
 │   └── config.py              Pydantic Settings (all configuration lives here)
-├── tests/                     Pytest test suite
-├── models/                    Model weights (gitignored; mount as volume in Docker)
-├── data/uploads/              Uploaded audio files
-├── results/                   Aligned/transcription/diarization JSON outputs
-├── db/                        Chroma vector stores (one sub-directory per job)
-├── prepared/                  Legacy JSONL staging area (unused by new pipeline)
-├── temp/                      Temporary per-job JSONL during indexing (auto-cleaned)
-├── Dockerfile                 Multi-stage build (CPU + CUDA 11.8/12.1)
-├── docker-compose.yml         Single-service GPU-ready compose configuration
-└── requirements.txt           Full dependency list with install notes
+├── frontend/                  New Next.js Web App
+│   ├── src/app/               App Router pages (Dashboard, Job Details, Chat)
+│   ├── src/components/        React Server/Client components (shadcn/ui, Tailwind)
+│   ├── src/lib/               API wrappers and WebSocket hooks
+│   ├── tests/                 Playwright E2E and Jest Unit tests
+│   ├── next.config.ts         Standalone Next.js configuration
+│   └── Dockerfile             Multi-stage frontend Dockerfile
+├── tests/                     Pytest test suite for Python Backend
+├── Dockerfile                 Backend Python engine Dockerfile
+├── docker-compose.yml         Run both Backend and Frontend easily
 ```
 
 ---
@@ -317,12 +305,23 @@ passed directly as environment variables.
 
 ## 6. Running the Application
 
-### Start the web server
+### Start the Backend Server
 
 ```bash
 source ../venv/bin/activate
 python -m meetbot.cli serve
 ```
+The API and WebSockets will be available at `http://localhost:8080`.
+
+### Start the Next.js Frontend
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:3000` to view the new React-based web interface.
 
 Open `http://localhost:8080`. Create an account on first run.
 
@@ -481,49 +480,26 @@ A `{"type":"done","retrieval_level":"..."}` event is sent when generation comple
 
 ## 10. Docker
 
-### Build
+The application supports Docker deployment for both the backend (CPU/GPU) and the new Next.js frontend.
 
+### Build Backend
 ```bash
 # CPU-only (default)
-docker build -t meetbot .
-
-# CUDA 11.8
-docker build --build-arg CUDA_VARIANT=cu118 -t meetbot-gpu .
-
-# CUDA 12.1
-docker build --build-arg CUDA_VARIANT=cu121 -t meetbot-gpu .
+docker build -t meetbot-backend .
 ```
 
-### Run (CPU)
-
+### Build Frontend
 ```bash
-docker run -p 8080:8080 \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/models:/app/models \
-  -v $(pwd)/db:/app/db \
-  -v $(pwd)/results:/app/results \
-  --env-file .env \
-  meetbot
+cd frontend
+docker build -t meetbot-frontend .
 ```
 
-### Run (GPU)
+### docker-compose (Frontend + Backend)
+
+A `docker-compose.yml` can be set up to run the local SQLite database/backend on port 8080 alongside the standalone Next.js image on port 3000 mapping internally to the backend.
 
 ```bash
-docker run --gpus all -p 8080:8080 \
-  -v $(pwd)/data:/app/data \
-  -v $(pwd)/models:/app/models \
-  -v $(pwd)/db:/app/db \
-  -v $(pwd)/results:/app/results \
-  --env-file .env \
-  -e EMBEDDING_DEVICE=cuda \
-  -e LOCAL_LLM_GPU_LAYERS=20 \
-  meetbot-gpu
-```
-
-### docker compose
-
-```bash
-# Start (GPU-enabled by default)
+# Start all services
 docker compose up -d
 
 # Tail logs
@@ -533,7 +509,7 @@ docker compose logs -f
 docker compose down
 ```
 
-### Volume mounts
+### Volume mounts (Backend)
 
 | Container path | Contents |
 |---|---|
@@ -640,6 +616,8 @@ classifier. The default is `"chunk"` when the parameter is omitted.
 
 ## 13. Running Tests
 
+### Backend Tests (Pytest)
+
 ```bash
 source ../venv/bin/activate
 python -m pytest tests/ --ignore=tests/test_characterization.py -v
@@ -648,8 +626,19 @@ python -m pytest tests/ --ignore=tests/test_characterization.py -v
 `test_characterization.py` requires real model weights and a valid `HF_API_TOKEN`.
 Skip it in CI with the `--ignore` flag above.
 
-Current test count: **249 passing** (including segment idempotency, retrieval level
-routing, streaming pipeline, and UI guard tests).
+### Frontend Tests (Jest & Playwright)
+
+Navigate to the `frontend` directory:
+
+```bash
+cd frontend
+
+# Run Unit Tests (Jest)
+npm run test
+
+# Run End-to-End Tests (Playwright)
+npm run test:e2e
+```
 
 ---
 

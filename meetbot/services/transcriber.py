@@ -105,33 +105,43 @@ class TranscriberService:
                     progress_callback("transcription", 15, "Converting audio to WAV format...")
                 wav_path = convert_to_wav(audio_path, output_dir="temp")
 
-                # 2. Check file size to determine if chunking is needed
-                if progress_callback:
-                    progress_callback("transcription", 20, "Analyzing audio file...")
-                wav_size = Path(wav_path).stat().st_size
-                should_chunk = (
-                    settings.AUDIO_CHUNK_ENABLE
-                    and wav_size >= settings.AUDIO_CHUNK_SIZE_BYTES
-                )
+                try:
+                    # 2. Check file size to determine if chunking is needed
+                    if progress_callback:
+                        progress_callback("transcription", 20, "Analyzing audio file...")
+                    wav_size = Path(wav_path).stat().st_size
+                    should_chunk = (
+                        settings.AUDIO_CHUNK_ENABLE
+                        and wav_size >= settings.AUDIO_CHUNK_SIZE_BYTES
+                    )
 
-                if should_chunk:
-                    logger.info(
-                        f"File size {wav_size / 1024 / 1024:.1f} MB exceeds threshold "
-                        f"({settings.AUDIO_CHUNK_SIZE_BYTES / 1024 / 1024:.1f} MB). Using chunking strategy."
-                    )
-                    if progress_callback:
-                        progress_callback("transcription", 25, f"File size: {wav_size / 1024 / 1024:.1f} MB - using chunking strategy...")
-                    raw = self._transcribe_with_chunking(
-                        wav_path, language=language, progress_callback=progress_callback, **kwargs
-                    )
-                else:
-                    # Direct transcription for small files
-                    logger.info(f"File size {wav_size / 1024 / 1024:.1f} MB. Using direct transcription.")
-                    if progress_callback:
-                        progress_callback("transcription", 30, f"Transcribing audio (size: {wav_size / 1024 / 1024:.1f} MB)...")
-                    raw = self.transcriber.transcribe(wav_path, language=language, **kwargs)
-                    if progress_callback:
-                        progress_callback("transcription", 80, "Transcription complete")
+                    if should_chunk:
+                        logger.info(
+                            f"File size {wav_size / 1024 / 1024:.1f} MB exceeds threshold "
+                            f"({settings.AUDIO_CHUNK_SIZE_BYTES / 1024 / 1024:.1f} MB). Using chunking strategy."
+                        )
+                        if progress_callback:
+                            progress_callback("transcription", 25, f"File size: {wav_size / 1024 / 1024:.1f} MB - using chunking strategy...")
+                        raw = self._transcribe_with_chunking(
+                            wav_path, language=language, progress_callback=progress_callback, **kwargs
+                        )
+                    else:
+                        # Direct transcription for small files
+                        logger.info(f"File size {wav_size / 1024 / 1024:.1f} MB. Using direct transcription.")
+                        if progress_callback:
+                            progress_callback("transcription", 30, f"Transcribing audio (size: {wav_size / 1024 / 1024:.1f} MB)...")
+                        raw = self.transcriber.transcribe(wav_path, language=language, **kwargs)
+                        if progress_callback:
+                            progress_callback("transcription", 80, "Transcription complete")
+                finally:
+                    # Always clean up the temporary WAV file after transcription
+                    try:
+                        import os as _os
+                        if Path(wav_path).exists():
+                            _os.remove(wav_path)
+                            logger.debug(f"Cleaned up temporary WAV: {wav_path}")
+                    except Exception as _cleanup_err:
+                        logger.warning(f"Could not clean up temp WAV {wav_path}: {_cleanup_err}")
 
             except Exception as e:
                 logger.error(f"Transcription failed: {e}")

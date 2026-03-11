@@ -209,7 +209,7 @@ class Retriever:
         try:
             import chromadb
 
-            client = chromadb.PersistentClient(path=db_dir)
+            client = chromadb.PersistentClient(path=db_dir, settings=chromadb.Settings(anonymized_telemetry=False))
             collection = client.get_collection(collection_name)
 
             include = ["documents", "metadatas", "distances"]

@@ -5,6 +5,12 @@ Registered on the NiceGUI FastAPI app via app.add_api_route().
 
 Routes
 ------
+GET  /api/jobs
+    Returns all jobs for the first user (stubbed for single user usage).
+
+POST /api/jobs/upload
+    Accepts an audio file via multipart/form-data and starts processing.
+
 GET  /api/jobs/{job_id}/status
     Returns job status, progress, and db_dir.
 
@@ -15,21 +21,43 @@ POST /api/jobs/{job_id}/query
 
 GET  /api/jobs/{job_id}/download?type=transcription|diarization|aligned
     Returns the requested JSON file as an attachment download.
+
+DELETE /api/jobs/{job_id}
+    Deletes the job and all associated files.
 """
 
 import json as _json
 import logging
 from typing import Literal, Optional
 
-from fastapi import HTTPException, Query as QueryParam
+from fastapi import HTTPException, Query as QueryParam, UploadFile, File, Form
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from ..db.database import get_session
 from ..db.crud import get_job, build_aligned_json_from_db
 from ..db.models import JobStatus
+from datetime import timezone as _tz
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_iso(dt) -> "str | None":
+    """Serialise a datetime to an ISO-8601 string with explicit UTC offset.
+
+    SQLite stores datetimes as plain text, so SQLAlchemy returns **naive**
+    datetime objects (no tzinfo).  Without an explicit offset, JavaScript's
+    ``new Date("2026-03-11T01:00:00")`` treats the value as *local* time,
+    causing the "9 hours ago" timestamp regression on UTC+9 systems.
+
+    Adding ``.replace(tzinfo=timezone.utc)`` ensures the output includes
+    ``+00:00`` so browsers convert UTC → local time correctly.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=_tz.utc)
+    return dt.isoformat()
 
 
 # ── Request / response schemas ────────────────────────────────────────────────
@@ -41,8 +69,233 @@ class QueryRequest(BaseModel):
         description="LLM backend: 'local' for llama.cpp GGUF; 'hf' for HuggingFace Inference API",
     )
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+    display_name: Optional[str] = None
+
+
+# ── Auth Handlers ─────────────────────────────────────────────────────────────
+
+async def api_auth_login(body: LoginRequest) -> JSONResponse:
+    """Authenticate user and return user info."""
+    from ..web.auth import authenticate_user
+    user = authenticate_user(body.username, body.password)
+    if user is None:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+    return JSONResponse({
+        "user_id": user.id,
+        "username": user.username,
+        "display_name": user.display_name or user.username,
+        "is_admin": user.is_admin,
+    })
+
+async def api_auth_register(body: RegisterRequest) -> JSONResponse:
+    """Register a new user account."""
+    from ..web.auth import hash_password
+    from ..db.crud import create_user, get_user_by_username
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        existing = get_user_by_username(db, body.username)
+        if existing:
+            raise HTTPException(status_code=409, detail="Username already exists")
+        hashed = hash_password(body.password)
+        user = create_user(
+            db, body.username, hashed,
+            display_name=body.display_name,
+        )
+        return JSONResponse({
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.username,
+            "is_admin": user.is_admin,
+        }, status_code=201)
+    finally:
+        db.close()
+
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
+
+async def api_list_jobs() -> JSONResponse:
+    """Return list of all jobs for the first available user."""
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        from ..db.models import User
+        # Stub for Next.js app: get the first user to own the jobs
+        user = db.query(User).first()
+        if not user:
+            return JSONResponse([])
+        
+        from ..db.crud import get_jobs_for_user
+        jobs = get_jobs_for_user(db, user.id, limit=50)
+        jobs_data = []
+        for job in jobs:
+            jobs_data.append({
+                "id": job.id,
+                "original_filename": job.original_filename,
+                "status": job.status.value,
+                "progress": job.progress,
+                "created_at": _utc_iso(job.created_at),
+                "duration_seconds": job.duration_seconds,
+                "file_size": job.file_size,
+                "db_dir": job.db_dir,
+                "progress_message": job.progress_message
+            })
+        return JSONResponse(jobs_data)
+    finally:
+        db.close()
+
+async def api_upload_job(
+    file: UploadFile = File(...),
+    language: Optional[str] = Form(None),
+    min_speakers: Optional[int] = Form(None),
+    max_speakers: Optional[int] = Form(None)
+) -> JSONResponse:
+    """Upload an audio file and start processing."""
+    from pathlib import Path
+    import uuid
+    from ..config import settings
+    from ..workers.queue import job_queue
+    from ..db.crud import create_job
+
+    original_name = file.filename
+    if not original_name:
+         raise HTTPException(status_code=400, detail="No filename provided")
+         
+    file_ext = Path(original_name).suffix.lower()
+    if file_ext not in settings.get_allowed_extensions():
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(settings.get_allowed_extensions())}"
+        )
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        from ..db.models import User
+        user = db.query(User).first()
+        if not user:
+             raise HTTPException(status_code=400, detail="No user found to assign job")
+             
+        # Generate unique filename and save
+        unique_name = f"{uuid.uuid4().hex}{file_ext}"
+        base = Path(settings.OUTPUT_DIR).parent
+        upload_dir = base / "data" / "uploads"
+        upload_dir.mkdir(parents=True, exist_ok=True)
+        upload_path = upload_dir / unique_name
+
+        # Save file to disk
+        with open(upload_path, "wb") as buffer:
+             import shutil
+             shutil.copyfileobj(file.file, buffer)
+        
+        saved_size = upload_path.stat().st_size
+
+        job = create_job(
+            db,
+            user_id=user.id,
+            filename=unique_name,
+            original_filename=original_name,
+            file_size=saved_size,
+            language=language,
+            backend="local",
+            min_speakers=min_speakers,
+            max_speakers=max_speakers,
+        )
+        job_id_local = job.id
+    finally:
+        db.close()
+
+    # Enqueue job for background processing
+    await job_queue.enqueue(job_id_local)
+    
+    return JSONResponse(
+        {"job_id": job_id_local, "status": "pending", "message": "Upload successful"},
+        status_code=202,
+    )
+
+async def api_delete_job(job_id: str) -> JSONResponse:
+    """Delete a job and all its data."""
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+            
+        from ..db.crud import delete_job
+        delete_job(db, job.id)
+    finally:
+        db.close()
+        
+    return JSONResponse({"status": "deleted"}, status_code=200)
+
+async def api_update_segment(job_id: str, segment_id: str, body: dict) -> JSONResponse:
+    """Update a specific segment and flush to JSON.
+    
+    ``segment_id`` can be either:
+      - The actual UUID of the Segment row, OR
+      - A numeric string representing the segment_index (0-based), which is
+        what the Next.js frontend sends since the download JSON doesn't include
+        DB IDs.
+    """
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        from ..db.crud import (
+            update_segment_text,
+            update_segment_speaker,
+            flush_segments_to_json,
+            get_segments_for_job,
+        )
+        from ..db.models import Segment as SegmentModel
+
+        # Resolve the real DB segment ID.
+        # If the caller sent a numeric index, look up the Segment by
+        # (job_id, segment_index).
+        resolved_id = segment_id
+        try:
+            idx = int(segment_id)
+            # It's a numeric index — look up by position
+            seg = (
+                db.query(SegmentModel)
+                .filter(
+                    SegmentModel.job_id == job_id,
+                    SegmentModel.segment_index == idx,
+                )
+                .first()
+            )
+            if seg is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Segment at index {idx} not found for job {job_id[:8]}",
+                )
+            resolved_id = seg.id
+        except ValueError:
+            # Not numeric — assume it's already a UUID
+            pass
+
+        if "text" in body:
+             update_segment_text(db, resolved_id, body["text"])
+        if "speaker" in body:
+             update_segment_speaker(db, resolved_id, body["speaker"])
+             
+        # Flush to the aligned JSON on disk so downloads and indexing are up to date!
+        try:
+             flush_segments_to_json(db, job_id)
+        except Exception as e:
+             logger.error(f"Failed to flush segments to JSON for job {job_id}: {e}")
+             
+    finally:
+        db.close()
+        
+    return JSONResponse({"status": "updated"}, status_code=200)
 
 async def api_job_status(job_id: str) -> JSONResponse:
     """Return current job status JSON."""
@@ -57,6 +310,9 @@ async def api_job_status(job_id: str) -> JSONResponse:
         raise HTTPException(status_code=404, detail="Job not found")
 
     return JSONResponse({
+        # Include both "id" (matches api_list_jobs and the frontend Job type)
+        # and "job_id" (legacy, kept for compatibility with any existing callers).
+        "id": job.id,
         "job_id": job.id,
         "status": job.status.value,
         "progress": job.progress,
@@ -67,6 +323,8 @@ async def api_job_status(job_id: str) -> JSONResponse:
         "result_json_path": job.result_json_path,
         "duration_seconds": job.duration_seconds,
         "original_filename": job.original_filename,
+        "file_size": job.file_size,
+        "created_at": _utc_iso(job.created_at),
     })
 
 
@@ -121,6 +379,22 @@ async def api_job_query(job_id: str, body: QueryRequest) -> JSONResponse:
     except Exception as exc:
         logger.error(f"API query failed for job {job_id[:8]}: {exc}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+async def api_get_chat_history(job_id: str) -> JSONResponse:
+    """Ensure a ChatSession exists and return its message history."""
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        from ..db.crud import get_or_create_chat_session, get_chat_messages
+        
+        # This ensures the session exists, fixing the issue where WS fails if no session found.
+        session = get_or_create_chat_session(db, job_id)
+        messages = get_chat_messages(db, session.id)
+        
+        return JSONResponse([m.to_dict() for m in messages])
+    finally:
+        db.close()
 
 
 # ── Download handler ──────────────────────────────────────────────────────────
@@ -227,6 +501,64 @@ async def api_job_download(
         )
     finally:
         db.close()
+
+
+# ── Audio serve handler ───────────────────────────────────────────────────────
+
+async def api_job_audio(job_id: str) -> FileResponse:
+    """
+    Stream the original uploaded audio file for a job.
+
+    GET /api/jobs/{job_id}/audio
+
+    Used by the frontend audio player to play back the recording alongside
+    the transcript.  The file is served from the uploads directory (not temp).
+
+    Errors
+    ------
+    404  Job not found or audio file missing from disk.
+    """
+    from pathlib import Path as _Path
+    from ..config import settings
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        filename = job.filename
+    finally:
+        db.close()
+
+    upload_dir = _Path(settings.OUTPUT_DIR).parent / "data" / "uploads"
+    audio_path = upload_dir / filename
+    if not audio_path.exists():
+        raise HTTPException(
+            status_code=404,
+            detail=f"Audio file not found on disk: {filename}",
+        )
+
+    ext = audio_path.suffix.lower()
+    _mime_map = {
+        ".mp3": "audio/mpeg",
+        ".wav": "audio/wav",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".flac": "audio/flac",
+        ".aac": "audio/aac",
+        ".webm": "audio/webm",
+    }
+    media_type = _mime_map.get(ext, "application/octet-stream")
+
+    return FileResponse(
+        path=str(audio_path),
+        media_type=media_type,
+        headers={
+            "Accept-Ranges": "bytes",
+            "Content-Disposition": f'inline; filename="{filename}"',
+        },
+    )
 
 
 # ── Reindex handler ───────────────────────────────────────────────────────────

@@ -11,7 +11,16 @@ Initializes the NiceGUI application with:
 
 import asyncio
 import logging
+import os
 from pathlib import Path
+
+# Disable ChromaDB's anonymous PostHog telemetry before any chromadb import.
+# On air-gapped (offline) hosts this prevents a flood of DNS-resolution
+# errors in the logs caused by background threads trying to reach
+# us.i.posthog.com.  Setting the env var here (before chromadb is imported
+# elsewhere in the process) is the most reliable disablement method.
+os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
+os.environ.setdefault("CHROMA_TELEMETRY", "False")
 
 from nicegui import app, ui
 
@@ -52,19 +61,35 @@ def _register_pages() -> None:
 
     # Register REST API endpoints.
     from .api import (
+        api_list_jobs,
+        api_upload_job,
+        api_delete_job,
+        api_update_segment,
         api_job_status,
         api_job_query,
         api_job_download,
+        api_job_audio,
         api_job_reindex,
         api_job_cancel,
         api_job_restart,
+        api_auth_login,
+        api_auth_register,
+        api_get_chat_history,
     )
+    app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
+    app.add_api_route("/api/auth/register",          api_auth_register, methods=["POST"])
+    app.add_api_route("/api/jobs",                   api_list_jobs,    methods=["GET"])
+    app.add_api_route("/api/jobs/upload",            api_upload_job,   methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}",          api_delete_job,   methods=["DELETE"])
+    app.add_api_route("/api/jobs/{job_id}/segments/{segment_id}", api_update_segment, methods=["PUT"])
     app.add_api_route("/api/jobs/{job_id}/status",   api_job_status,   methods=["GET"])
     app.add_api_route("/api/jobs/{job_id}/query",    api_job_query,    methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/download", api_job_download, methods=["GET"])
+    app.add_api_route("/api/jobs/{job_id}/audio",    api_job_audio,    methods=["GET"])
     app.add_api_route("/api/jobs/{job_id}/reindex",  api_job_reindex,  methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/cancel",   api_job_cancel,   methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/restart",  api_job_restart,  methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}/chat/history", api_get_chat_history, methods=["GET"])
 
     # Register WebSocket endpoint for streaming chat (RAG Q&A).
     from .ws_chat import ws_chat
@@ -129,6 +154,16 @@ def create_app() -> None:
     # Setup
     _setup_database()
     _setup_upload_dirs()
+
+    # CORS Middleware
+    from fastapi.middleware.cors import CORSMiddleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["http://localhost:3000"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
 
     # Authentication middleware
     app.on_connect(_auth_middleware)

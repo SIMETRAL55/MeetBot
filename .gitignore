@@ -82,7 +82,9 @@ tmp/
 *.tmp
 
 # Generated database files (rebuild locally)
-db/
+# NOTE: /db/ is anchored to the repo root so it ignores the top-level vector-
+# store/SQLite directory without also hiding meetbot/db/ (the Python module).
+/db/
 *.db
 *.sqlite
 *.sqlite3
