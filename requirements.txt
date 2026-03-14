@@ -93,21 +93,8 @@ langchain-huggingface==1.2.0  # HuggingFace integration for LangChain
 # ============================================================================
 huggingface-hub==0.36.0       # Download and interact with HuggingFace models
 transformers==4.57.6          # HuggingFace Transformers library
-
-
-# ============================================================================
-# Optional: Local Quantized LLM Inference (Recommended for Cost Savings)
-# ============================================================================
-# Enables local quantized GGUF model inference (e.g. Rakuten-7B).
-# Requires CMake and a C++ compiler (build-essential).
-#
-# The Dockerfile compiles this with full CUDA flags for GPU variants; for
-# a local CPU-only install just: pip install llama-cpp-python
-#
-# GPU (CUDA 11.8 / 12.1) — compile from source:
-#   CMAKE_ARGS="-DGGML_CUDA=on" FORCE_CMAKE=1 pip install llama-cpp-python --no-binary llama-cpp-python
-
-llama-cpp-python==0.3.16
+autoawq                       # AWQ 4-bit quantized model inference (GEMM kernel)
+accelerate                    # HuggingFace Accelerate for device_map support
 
 
 # ============================================================================

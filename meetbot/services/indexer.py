@@ -155,7 +155,7 @@ class IndexerService:
         self,
         prepared_jsonl: str,
         persist_root: str = "db",
-        embedding_model: str = "./models/sarashina-embedding-v1-1b",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
         collection_name: Optional[str] = None,
         overwrite: bool = False,
         progress_callback: Optional[ProgressCallback] = None,

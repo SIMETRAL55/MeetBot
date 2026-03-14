@@ -17,7 +17,7 @@ build/
 .pytest_cache/
 htmlcov/
 .nicegui/
-
+project_context/
 # ============================================================================
 # IDE & Editor Files
 # ============================================================================
@@ -50,11 +50,6 @@ htmlcov/
 # ============================================================================
 # Large Model Files (Do not commit - download/generate locally)
 # ============================================================================
-# Quantized LLM models
-rakutenai-7b-instruct-gguf/
-*.gguf
-*.bin
-
 # Embedding models
 sarashina-embedding-v1-1b/
 *embedding*/
@@ -174,7 +169,7 @@ site/
 *~
 .project
 .settings
-
+PROJECT_CONTEXT.md
 
 # ============================================================================
 # Project-specific additions

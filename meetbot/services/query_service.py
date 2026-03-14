@@ -4,7 +4,7 @@ LLM backend selection
 ---------------------
 Pass ``llm_mode`` to :meth:`QueryService.query` to choose the generation backend:
 
-* ``"local"``  – Use the locally-loaded GGUF model via llama.cpp.
+* ``"local"``  – Use the locally-loaded AWQ model via transformers + autoawq.
 * ``"hf"``     – Use the HuggingFace Inference API.
 
 This mirrors the ``--use-local-llm`` flag in the CLI: only the final generation
@@ -577,38 +577,35 @@ class QueryService:
     @staticmethod
     def _get_local_adapter() -> Any:
         """
-        Return a cached LocalLLMAdapter instance.
-
-        Uses the LocalLLMManager singleton so the model is never reloaded
-        between requests.
+        Return an AwqLLMAdapter for the configured AWQ model.
 
         Returns:
-            LocalLLMAdapter instance
+            AwqLLMAdapter instance.
 
         Raises:
-            RuntimeError: If llama_cpp is not installed or model path is invalid
+            RuntimeError: If autoawq or transformers is not installed.
         """
-        from ..adapters.llm import LocalLLMAdapter
+        from ..adapters.llm import AwqLLMAdapter
         from ..config import settings
 
-        logger.info("Using Local LLM")
-        return LocalLLMAdapter(
+        return AwqLLMAdapter(
             model_path=settings.LOCAL_LLM_MODEL_PATH,
-            n_gpu_layers=settings.LOCAL_LLM_GPU_LAYERS,
+            max_new_tokens=settings.LOCAL_LLM_MAX_TOKENS,
+            temperature=settings.LOCAL_LLM_TEMPERATURE,
         )
 
     @staticmethod
     def _get_llm_model(use_local: Optional[bool] = None) -> Optional[Any]:
         """
-        Backward-compatible helper: return a local LLM adapter when enabled.
+        Backward-compatible helper: return an AwqLLMAdapter when local LLM is enabled.
 
         Args:
             use_local: Override use_local_llm setting
 
         Returns:
-            LLM instance if available, None otherwise
+            AwqLLMAdapter instance if enabled, None otherwise
         """
-        from ..adapters.llm import get_local_llm
+        from ..adapters.llm import AwqLLMAdapter
         from ..config import settings
 
         enabled = use_local if use_local is not None else settings.USE_LOCAL_LLM
@@ -617,40 +614,27 @@ class QueryService:
             return None
 
         try:
-            if get_local_llm is None:
-                logger.debug("Local LLM module not available")
-                return None
-
-            logger.info("Loading local LLM...")
-            llm = get_local_llm(
+            logger.info("Loading AWQ local LLM...")
+            return AwqLLMAdapter(
                 model_path=settings.LOCAL_LLM_MODEL_PATH,
-                n_gpu_layers=settings.LOCAL_LLM_GPU_LAYERS,
+                max_new_tokens=settings.LOCAL_LLM_MAX_TOKENS,
+                temperature=settings.LOCAL_LLM_TEMPERATURE,
             )
-            return llm
-
         except Exception as e:
             logger.warning(f"Failed to load local LLM: {e}")
             return None
 
     @staticmethod
     def _call_local_llm(llm: Any, system_msg: str, user_content: str) -> str:
-        """
-        Call local LLM with instruction format.
-
-        Args:
-            llm: Local LLM instance
-            system_msg: System instructions
-            user_content: User query with context
-
-        Returns:
-            Generated response text
-        """
-        # Format for RakutenAI-7B-Instruct
+        # Raw [INST] prompt string (fallback if chat template unavailable)
         prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
-
+        # Structured messages list — used by AWQ adapter via apply_chat_template
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": user_content},
+        ]
         logger.info(f"Calling local LLM (prompt length={len(prompt)} chars)...")
-        response = llm.generate(prompt)
-
+        response = llm.generate(prompt, messages=messages)
         logger.info(f"Received response ({len(response)} chars)")
         return response
 
@@ -748,7 +732,7 @@ class QueryService:
         self,
         question: str,
         db_dir: str,
-        embedding_model: str = "./models/sarashina-embedding-v1-1b",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
         hf_model: str = "deepseek-ai/DeepSeek-V3.1",
         k: int = 4,
         use_local_llm: Optional[bool] = None,
@@ -763,7 +747,7 @@ class QueryService:
         LLM backend selection (both ``llm_mode`` and ``use_local_llm`` are
         supported for backward-compatibility):
 
-        * ``llm_mode="local"``  → LocalLLMAdapter (llama.cpp GGUF)
+        * ``llm_mode="local"``  → AwqLLMAdapter (AWQ safetensors via transformers + autoawq)
         * ``llm_mode="hf"``     → HuggingFace Inference API
         * If ``llm_mode`` is not supplied then ``use_local_llm`` and / or
           ``settings.USE_LOCAL_LLM`` is used as before.
@@ -860,7 +844,7 @@ class QueryService:
 
         if effective_mode == "local":
             if progress_callback:
-                progress_callback("query", 70, "Calling Local LLM (llama.cpp)...")
+                progress_callback("query", 70, "Calling Local AWQ LLM (transformers)...")
             logger.info("Using Local LLM")
             try:
                 llm = self._get_local_adapter()
@@ -934,7 +918,7 @@ class QueryService:
         self,
         question: str,
         db_dir: str,
-        embedding_model: str = "./models/sarashina-embedding-v1-1b",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
         hf_model: str = "deepseek-ai/DeepSeek-V3.1",
         k: int = 4,
         llm_mode: LLMMode = "local",
@@ -1099,6 +1083,7 @@ class QueryService:
                     prompt=prompt,
                     max_tokens=_s.LOCAL_LLM_MAX_TOKENS,
                     temperature=_s.LOCAL_LLM_TEMPERATURE,
+                    messages=messages,
                 )
             else:
                 logger.info(

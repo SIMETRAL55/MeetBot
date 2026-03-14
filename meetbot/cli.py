@@ -310,7 +310,7 @@ def main():
     index_parser = subparsers.add_parser("index", help="Build vector index from transcript")
     index_parser.add_argument("transcript_json", help="Path to transcript JSON")
     index_parser.add_argument("--db-root", default="db", help="Root directory for vector databases")
-    index_parser.add_argument("--embedding-model", default="./models/sarashina-embedding-v1-1b",
+    index_parser.add_argument("--embedding-model", default="./models/all-MiniLM-L6-v2",
                              help="Embedding model name/path")
     index_parser.add_argument("--log-level", default="INFO")
     index_parser.set_defaults(func=cmd_index)
@@ -319,7 +319,7 @@ def main():
     query_parser = subparsers.add_parser("query", help="Answer question using indexed transcript")
     query_parser.add_argument("db_dir", help="Path to vector database")
     query_parser.add_argument("question", help="Question to answer")
-    query_parser.add_argument("--embedding-model", default="./models/sarashina-embedding-v1-1b")
+    query_parser.add_argument("--embedding-model", default="./models/all-MiniLM-L6-v2")
     query_parser.add_argument("--hf-model", default="deepseek-ai/DeepSeek-V3.1",
                              help="HuggingFace model for generation")
     query_parser.add_argument("--k", type=int, default=4, help="Number of documents to retrieve")

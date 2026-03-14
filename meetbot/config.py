@@ -8,12 +8,11 @@ Environment variables (in priority order):
     HF_API_TOKEN, HF_HUB_TOKEN, HUGGINGFACEHUB_API_TOKEN: HuggingFace API token
     TRANSCRIPTION_BACKEND: 'local' or 'huggingface' (default: 'huggingface')
     USE_LOCAL_LLM: 'true'/'false', enable local quantized LLM (default: 'false')
-    LOCAL_LLM_MODEL_PATH: Path to GGUF model (default: './rakutenai-7b-instruct-gguf')
-    LOCAL_LLM_GPU_LAYERS: Number of GPU layers (default: 20)
+    LOCAL_LLM_MODEL_PATH: Path to AWQ model directory (default: './models/qwen2.5-7B')
     LOCAL_LLM_CONTEXT_SIZE: Context window in tokens (default: 2048)
     LOCAL_LLM_MAX_TOKENS: Max output tokens (default: 256)
     VECTOR_DB_PATH: Path to ChromaDB directory (default: './db/sample')
-    EMBEDDING_MODEL_PATH: HuggingFace embedding model (default: 'sarashina-embedding-v1-1b')
+    EMBEDDING_MODEL_PATH: HuggingFace embedding model (default: 'all-MiniLM-L6-v2')
     DEVICE: 'cuda' or 'cpu' (default: auto-detect)
 
 Example usage:
@@ -77,7 +76,7 @@ class Settings(BaseSettings):
     DIARIZATION_MODEL_REVISION: ClassVar[str] = "main"
 
     EMBEDDING_MODEL: str = Field(
-        "./models/sarashina-embedding-v1-1b",
+        "./models/all-MiniLM-L6-v2",
         env="EMBEDDING_MODEL",
         description="Local path to embedding model directory or HuggingFace model ID",
     )
@@ -107,7 +106,7 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # Local LLM Configuration (for quantized GGUF models)
+    # Local LLM Configuration (AWQ quantized models via transformers + autoawq)
     # =========================================================================
     USE_LOCAL_LLM: bool = Field(
         False,
@@ -116,20 +115,9 @@ class Settings(BaseSettings):
     )
 
     LOCAL_LLM_MODEL_PATH: str = Field(
-        "./models/rakutenai-7b-instruct-gguf",
+        "./models/qwen2.5-7B",
         env="LOCAL_LLM_MODEL_PATH",
-        description="Path to local quantized GGUF model directory or file",
-    )
-
-    LOCAL_LLM_GPU_LAYERS: int = Field(
-        15,
-        env="LOCAL_LLM_GPU_LAYERS",
-        description=(
-            "Number of model layers to offload to GPU (higher = more VRAM, faster). "
-            "Defaults to 0 (CPU-only) because at query time most VRAM is occupied by "
-            "Pyannote/Whisper residuals. Set to 8 or higher only if you have "
-            ">=1 GiB VRAM free after all other models finish."
-        ),
+        description="Path to local AWQ model directory (must contain config.json and safetensors shards)",
     )
 
     LOCAL_LLM_CONTEXT_SIZE: int = Field(
@@ -151,14 +139,23 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # Vector Database & Retrieval Configuration
+    # Database Configuration
     # =========================================================================
+    DB_PATH: str = Field(
+        "./db/meetbot.db",
+        env="DB_PATH",
+        description="Path to the SQLite database file (must be on a persistent volume in Docker)",
+    )
+
     VECTOR_DB_PATH: str = Field(
         "./db/sample",
         env="VECTOR_DB_PATH",
         description="Path to ChromaDB persistent storage directory",
     )
 
+    # =========================================================================
+    # Vector Database & Retrieval Configuration
+    # =========================================================================
     VECTOR_DB_COLLECTION_NAME: str = Field(
         "meetbot",
         env="VECTOR_DB_COLLECTION_NAME",
@@ -240,12 +237,11 @@ class Settings(BaseSettings):
 
     # ── Memory-safe indexing settings ────────────────────────────────────
     EMBED_BATCH_SIZE: int = Field(
-        # Default 8 (was 16).  The sarashina-embedding-v1-1b model (1.1 B
-        # params, ~4 GB RAM on CPU) creates large activation tensors during
-        # each forward pass.  Batch-16 can push a 16 GB machine into swap;
-        # batch-8 keeps peak usage bounded while still being efficient.
-        # Increase via EMBED_BATCH_SIZE env var on machines with >32 GB RAM.
-        8,
+        # Default 32.  all-MiniLM-L6-v2 is a small 22 M-param model (~90 MB)
+        # with 384-dim outputs — far less memory pressure than the previous
+        # 1.1 B-param sarashina model.  Batch-32 is efficient on typical
+        # hardware; increase via EMBED_BATCH_SIZE for even faster throughput.
+        32,
         env="EMBED_BATCH_SIZE",
         description=(
             "Number of documents to embed in a single batch during indexing. "

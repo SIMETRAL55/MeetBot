@@ -27,7 +27,6 @@
 #     -v $(pwd)/db:/app/db \
 #     --env-file .env \
 #     -e EMBEDDING_DEVICE=cuda \
-#     -e LOCAL_LLM_GPU_LAYERS=20 \
 #     meetbot-gpu
 # =============================================================================
 
@@ -53,6 +52,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         git \
         curl \
+        ffmpeg \
         libsndfile1-dev \
         libffi-dev \
         pkg-config \
@@ -94,6 +94,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         git \
         curl \
+        ffmpeg \
         libsndfile1-dev \
         libffi-dev \
         pkg-config \
@@ -133,6 +134,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         cmake \
         git \
         curl \
+        ffmpeg \
         libsndfile1-dev \
         libffi-dev \
         pkg-config \
@@ -183,51 +185,11 @@ RUN if [ "$CUDA_VARIANT" = "cu118" ]; then \
 # ── Core Python dependencies ─────────────────────────────────────────────────
 # Exclude:
 #   • torch / torchvision / torchaudio — already installed above
-#   • llama-cpp-python             — compiled separately below with CUDA flags
 #   • blank lines / comments
 COPY requirements.txt .
-RUN grep -v -E "^(llama-cpp-python|torch|torchvision|torchaudio|#|[[:space:]]*$)" \
+RUN grep -v -E "^(torch|torchvision|torchaudio|#|[[:space:]]*$)" \
         requirements.txt > requirements_core.txt \
     && pip install -r requirements_core.txt
-
-# ── llama-cpp-python — GPU: compile from source with CUDA flags ───────────────
-#
-# Key CMake flags explained:
-#   GGML_CUDA=on
-#     Enables the CUDA backend.  (LLAMA_CUDA was deprecated in llama.cpp ~b3000.)
-#
-#   CUDA_TOOLKIT_ROOT_DIR / CMAKE_CUDA_COMPILER
-#     Explicit paths so FindCUDAToolkit never mis-detects the toolkit location.
-#
-#   CMAKE_CUDA_ARCHITECTURES
-#     Explicit list required for CMake < 3.23 (Ubuntu 22.04 ships 3.22).
-#     The "all-major" shorthand keyword was added in CMake 3.23 — using it on
-#     3.22 produces an empty arch string ("compute_") that makes nvcc abort.
-#     List covers: Pascal(60) Volta(70) Turing(75) Ampere(80,86) Ada(89) Hopper(90)
-#
-#   CMAKE_EXE_LINKER_FLAGS / CMAKE_SHARED_LINKER_FLAGS
-#     Point the linker at /usr/local/cuda/lib64/stubs so it can resolve -lcuda
-#     against libcuda.so.1 (the versioned stub symlink created in the base stage).
-#     Without this the linker never searches the stubs directory and fails with
-#     "libcuda.so.1 not found / undefined reference to cuMemCreate" etc.
-#
-#   LDFLAGS (env var)
-#     Belt-and-suspenders: some build systems bypass CMake linker flags and
-#     read LDFLAGS directly from the environment.
-#
-RUN if [ "$CUDA_VARIANT" = "cu118" ] || [ "$CUDA_VARIANT" = "cu121" ]; then \
-        LDFLAGS="-L/usr/local/cuda/lib64/stubs" \
-        CMAKE_ARGS="-DGGML_CUDA=on \
-                    -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda \
-                    -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
-                    -DCMAKE_CUDA_ARCHITECTURES=60;70;75;80;86;89;90 \
-                    -DCMAKE_EXE_LINKER_FLAGS=-L/usr/local/cuda/lib64/stubs \
-                    -DCMAKE_SHARED_LINKER_FLAGS=-L/usr/local/cuda/lib64/stubs" \
-        FORCE_CMAKE=1 \
-        pip install llama-cpp-python --no-binary llama-cpp-python; \
-    else \
-        pip install llama-cpp-python; \
-    fi
 
 # Install the project package
 COPY setup.py .
@@ -236,7 +198,7 @@ RUN pip install -e .
 
 # =============================================================================
 # Runtime base images — slim counterparts of the builder bases.
-# They carry CUDA *runtime* libraries needed by llama-cpp-python at run time
+# They carry CUDA *runtime* libraries needed by torch/autoawq at run time
 # but omit the compiler + headers to keep image size down.
 # =============================================================================
 FROM python:3.12-slim AS base-runtime-cpu
@@ -288,7 +250,12 @@ ENV DEBIAN_FRONTEND=noninteractive \
     PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     VIRTUAL_ENV=/opt/venv \
-    PATH="/opt/venv/bin:${PATH}"
+    PATH="/opt/venv/bin:${PATH}" \
+    # Force torchaudio to prefer the ffmpeg I/O backend over soundfile.
+    # soundfile (libsndfile) cannot decode M4A/AAC/MP3; ffmpeg handles all
+    # common audio formats.  The fallback in diarization.py also uses ffmpeg
+    # subprocess if this backend is unavailable.
+    TORCHAUDIO_BACKEND=ffmpeg
 
 # Runtime system deps: ffmpeg (audio decoding), libgomp (OpenMP for torch),
 # tini (PID 1 signal forwarding + zombie reaping)
@@ -320,7 +287,7 @@ COPY --chown=meetbot:meetbot setup.py ./
 #   /app/db              Chroma vector store + SQLite DB
 #   /app/results         JSON pipeline outputs
 #   /app/temp            transient pipeline working files
-RUN mkdir -p data/uploads models db results prepared temp \
+RUN mkdir -p data/uploads models db results prepared temp .cache_hf \
     && chown -R meetbot:meetbot /app
 
 # Default configuration — override with -e or --env-file
@@ -328,8 +295,8 @@ ENV OUTPUT_DIR=/app/results \
     VECTOR_DB_PATH=/app/db/chroma \
     DB_PATH=/app/db/meetbot.db \
     TEMP_DIR=/app/temp \
-    LOCAL_LLM_MODEL_PATH=/app/models/rakutenai-7b-instruct-gguf \
-    EMBEDDING_MODEL=/app/models/sarashina-embedding-v1-1b \
+    LOCAL_LLM_MODEL_PATH=/app/models/qwen2.5-7B \
+    EMBEDDING_MODEL=/app/models/all-MiniLM-L6-v2 \
     EMBEDDING_DEVICE=cpu \
     TRANSCRIPTION_BACKEND=huggingface \
     USE_LOCAL_LLM=false \

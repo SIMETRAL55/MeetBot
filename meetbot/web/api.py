@@ -66,7 +66,7 @@ class QueryRequest(BaseModel):
     q: str
     llm_mode: Literal["local", "hf"] = Field(
         "local",
-        description="LLM backend: 'local' for llama.cpp GGUF; 'hf' for HuggingFace Inference API",
+        description="LLM backend: 'local' for AWQ model via transformers; 'hf' for HuggingFace Inference API",
     )
 
 class LoginRequest(BaseModel):

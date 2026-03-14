@@ -124,7 +124,7 @@ class MeetBotPipeline:
         self,
         transcript_json: str,
         db_root: str = "db",
-        embedding_model: str = "./sarashina-embedding-v1-1b",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
         overwrite: bool = False,
     ) -> Dict[str, Any]:
         """
@@ -180,7 +180,7 @@ class MeetBotPipeline:
         self,
         question: str,
         db_dir: str,
-        embedding_model: str = "./sarashina-embedding-v1-1b",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
         hf_model: str = "deepseek-ai/DeepSeek-V3.1",
         k: int = 4,
         use_local_llm: Optional[bool] = None,

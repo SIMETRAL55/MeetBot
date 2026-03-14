@@ -108,6 +108,7 @@ def save_to_cache(
         save_to_cache("openai/whisper-large-v3", "audio.wav", result)
     """
     p = cache_path_for(model_name, audio_path, extra)
+    p.parent.mkdir(parents=True, exist_ok=True)
 
     try:
         with p.open("w", encoding="utf-8") as fh:

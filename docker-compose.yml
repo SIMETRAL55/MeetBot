@@ -1,63 +1,120 @@
 # =============================================================================
-# MeetBot — Docker Compose Configuration
+# MeetBot — Optimized Docker Compose Configuration
 #
-# GPU-enabled single-service deployment with persistent storage.
+# Architecture: two containers (backend + frontend) sharing a Docker network.
 #
-# Quick start:
+# Layer-cache strategy
+# ─────────────────────
+# • Backend: requirements.txt is copied and pip-installed BEFORE the source
+#   tree is copied.  Only a requirements.txt change busts the dep layer.
+# • Frontend: package.json / package-lock.json are copied and npm ci runs
+#   BEFORE the source tree is copied.  Same benefit.
+#
+# Persistent storage strategy
+# ─────────────────────────────
+# bind mounts   — user-facing directories that should be inspectable / editable
+#                 from the host: data, db, results, models, temp, prepared
+# named volumes — runtime caches that are managed entirely by Docker and have
+#                 no need to appear in the project directory: hf_cache
+#
+# Quick start (CPU):
 #   docker compose up -d
 #
-# CPU-only (no GPU):
-#   Remove the `deploy.resources.reservations` block below and set
-#   DEVICE=cpu, EMBEDDING_DEVICE=cpu, LOCAL_LLM_GPU_LAYERS=0.
+# GPU (CUDA 11.8):
+#   CUDA_VARIANT=cu118 DEVICE=cuda EMBEDDING_DEVICE=cuda docker compose up -d
+#
+# GPU (CUDA 12.1):
+#   CUDA_VARIANT=cu121 DEVICE=cuda EMBEDDING_DEVICE=cuda docker compose up -d
+#
+# Rebuild after code change (deps layer stays cached):
+#   docker compose build meetbot
+#   docker compose up -d meetbot
+#
+# Full rebuild (bust all caches):
+#   docker compose build --no-cache
 # =============================================================================
 
+# ---------------------------------------------------------------------------
+# Shared environment fragment — referenced by the meetbot service only.
+# Using YAML anchors avoids repeating long env lists.
+# ---------------------------------------------------------------------------
+x-meetbot-env: &meetbot-env
+  # ── Web server ──────────────────────────────────────────────────────────
+  WEB_HOST: "0.0.0.0"
+  WEB_PORT: "8080"
+  WEB_SECRET_KEY: ${WEB_SECRET_KEY:-change-this-in-production}
+  WEB_STORAGE_SECRET: ${WEB_STORAGE_SECRET:-change-this-storage-secret}
+
+  # ── HuggingFace ─────────────────────────────────────────────────────────
+  # Required for Pyannote speaker diarization (gated model) and HF Inference API.
+  HF_API_TOKEN: ${HF_API_TOKEN:-}
+
+  # ── Transcription ───────────────────────────────────────────────────────
+  # 'local'       → GPU Whisper (needs DEVICE=cuda and a CUDA build)
+  # 'huggingface' → HuggingFace Inference API (needs HF_API_TOKEN)
+  TRANSCRIPTION_BACKEND: ${TRANSCRIPTION_BACKEND:-huggingface}
+
+  # ── LLM backend ─────────────────────────────────────────────────────────
+  # 'true'  → local AWQ via transformers + autoawq (needs LOCAL_LLM_MODEL_PATH)
+  # 'false' → HuggingFace Inference API            (needs HF_API_TOKEN)
+  USE_LOCAL_LLM: ${USE_LOCAL_LLM:-false}
+  HF_MODEL: ${HF_MODEL:-deepseek-ai/DeepSeek-V3-0324}
+  HF_PROVIDER: ${HF_PROVIDER:-auto}
+
+  # ── Compute devices ─────────────────────────────────────────────────────
+  # CPU-only (default): leave both as 'cpu'.
+  # GPU:               set DEVICE=cuda EMBEDDING_DEVICE=cuda in your .env
+  DEVICE: ${DEVICE:-cpu}
+  EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
+
+  # ── Model paths (must match volume mounts below) ────────────────────────
+  EMBEDDING_MODEL: /app/models/all-MiniLM-L6-v2
+  LOCAL_LLM_MODEL_PATH: /app/models/qwen2.5-7B
+
+  # ── I/O paths (must match volume mounts below) ──────────────────────────
+  OUTPUT_DIR: /app/results
+  VECTOR_DB_PATH: /app/db/chroma
+  # DB_PATH puts the SQLite file inside /app/db/ so it is covered by the
+  # ./db bind mount and persists across container rebuilds.
+  DB_PATH: /app/db/meetbot.db
+  TEMP_DIR: /app/temp
+  PREPARED_DOCS_DIR: /app/prepared
+  # HuggingFace model download cache → named volume (no host directory needed)
+  CACHE_DIR: /app/.cache_hf
+
 services:
+  # ---------------------------------------------------------------------------
+  # Backend — Python / NiceGUI + FastAPI
+  # ---------------------------------------------------------------------------
   meetbot:
     build:
       context: .
       dockerfile: Dockerfile
       args:
-        # CUDA_VARIANT=cpu | cu118 | cu121 — controls which PyTorch wheel is installed.
-        # Change to cu118 or cu121 when building for a CUDA-capable host.
+        # CUDA_VARIANT: cpu | cu118 | cu121
+        # The Dockerfile copies requirements.txt and installs deps BEFORE
+        # copying application source, so rebuilding after a code-only change
+        # reuses the cached pip layer entirely.
         CUDA_VARIANT: ${CUDA_VARIANT:-cpu}
     container_name: meetbot-app
     ports:
       - "${WEB_PORT:-8080}:8080"
     volumes:
-      # Persistent data — survives container restarts
-      - ./data:/app/data                    # Uploaded audio files
-      - ./results:/app/results              # Pipeline output JSONs
-      - ./db:/app/db                        # ChromaDB vector stores + SQLite DB
-      - ./temp:/app/temp                    # Temporary JSONL during indexing (auto-cleaned)
-      - ./.cache_hf:/app/.cache_hf          # HuggingFace model download cache
-      # Local model weights — mounted read-only; files must exist on host
+      # ── bind mounts: user-managed, inspectable from the host ────────────
+      - ./data:/app/data            # Audio uploads  (data/uploads/*.wav …)
+      - ./results:/app/results      # Pipeline JSON outputs
+      - ./db:/app/db                # ChromaDB vector store + SQLite DB
+      - ./prepared:/app/prepared    # Intermediate JSONL before indexing
+      - ./temp:/app/temp            # Transient pipeline working files
+      # Models are large; mount read-only so the container can't corrupt them.
       - ./models:/app/models:ro
+      # ── named volume: Docker-managed HuggingFace model download cache ────
+      # Whisper / Pyannote weights are downloaded once and survive rebuilds.
+      - hf_cache:/app/.cache_hf
     environment:
-      # Web server
-      - WEB_HOST=0.0.0.0
-      - WEB_PORT=8080
-      - WEB_SECRET_KEY=${WEB_SECRET_KEY:-change-this-in-production}
-      - WEB_STORAGE_SECRET=${WEB_STORAGE_SECRET:-change-this-storage-secret}
-      # Transcription backend: 'local' (GPU Whisper) or 'huggingface' (API)
-      - TRANSCRIPTION_BACKEND=${TRANSCRIPTION_BACKEND:-local}
-      # HuggingFace token (required for Pyannote and gated models)
-      - HF_API_TOKEN=${HF_API_TOKEN:-}
-      # LLM backend: 'true' = local GGUF, 'false' = HuggingFace Inference API
-      - USE_LOCAL_LLM=${USE_LOCAL_LLM:-true}
-      # Compute devices
-      - DEVICE=${DEVICE:-cuda}
-      - EMBEDDING_DEVICE=${EMBEDDING_DEVICE:-cuda}
-      # Model paths (must match the volume mount above)
-      - EMBEDDING_MODEL=/app/models/sarashina-embedding-v1-1b
-      - LOCAL_LLM_MODEL_PATH=/app/models/rakutenai-7b-instruct-gguf
-      - LOCAL_LLM_GPU_LAYERS=${LOCAL_LLM_GPU_LAYERS:-15}
-      # I/O paths (must match volume mounts)
-      - OUTPUT_DIR=/app/results
-      - VECTOR_DB_PATH=/app/db/chroma
-      - CACHE_DIR=/app/.cache_hf
-      - TEMP_DIR=/app/temp
+      <<: *meetbot-env
     # GPU access — requires nvidia-container-toolkit on the host.
-    # Remove this block entirely for a CPU-only deployment.
+    # Remove (or comment out) this entire `deploy` block for CPU-only.
     deploy:
       resources:
         reservations:
@@ -72,8 +129,57 @@ services:
         max-size: "50m"
         max-file: "3"
     healthcheck:
+      # The NiceGUI server is ready when it serves the root page.
+      # start_period is generous because the first run downloads ML models.
       test: ["CMD", "curl", "-fsS", "http://localhost:8080/"]
       interval: 30s
       timeout: 10s
-      start_period: 90s
+      start_period: 120s
+      retries: 5
+
+  # ---------------------------------------------------------------------------
+  # Frontend — Next.js (standalone build)
+  # ---------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        # NEXT_PUBLIC_API_URL is baked into the JS bundle at build time.
+        # Default works for local use (browser → host → container port 8080).
+        # Override for remote / production deployments:
+        #   NEXT_PUBLIC_API_URL=http://192.168.1.50:8080/api docker compose build
+        NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080/api}
+    container_name: meetbot-frontend
+    ports:
+      - "${FRONTEND_PORT:-3000}:3000"
+    environment:
+      NODE_ENV: production
+      NEXT_PUBLIC_API_URL: ${NEXT_PUBLIC_API_URL:-http://localhost:8080/api}
+    depends_on:
+      meetbot:
+        condition: service_healthy
+    restart: unless-stopped
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      start_period: 30s
       retries: 3
+
+# =============================================================================
+# Named volumes
+# =============================================================================
+volumes:
+  # HuggingFace model download cache.
+  # Whisper (openai/whisper-large-v3) and Pyannote (pyannote/speaker-
+  # diarization-3.1) weights are downloaded on first run and stored here.
+  # The volume persists across `docker compose down` and full image rebuilds,
+  # so models are never re-downloaded unless you explicitly run:
+  #   docker volume rm meetbot_hf_cache
+  hf_cache:

@@ -24,10 +24,16 @@ _SessionLocal = None
 
 
 def _get_db_path() -> Path:
-    """Get database file path from config."""
+    """Get database file path from config.
+
+    Reads ``DB_PATH`` from settings (env var ``DB_PATH``).
+    Defaults to ``./db/meetbot.db`` (relative to the working directory),
+    which maps to ``/app/db/meetbot.db`` inside the Docker container —
+    covered by the ``./db:/app/db`` bind mount so the database persists
+    across container rebuilds.
+    """
     from ..config import settings
-    base_dir = Path(settings.OUTPUT_DIR).parent
-    return base_dir / "meetbot.db"
+    return Path(settings.DB_PATH).expanduser().resolve()
 
 
 def get_engine(db_path: str | None = None):

@@ -6,7 +6,7 @@ Provides:
 - Token-by-token streaming answers via QueryService.query_stream()
 - Sources panel shown before the answer begins
 - Chat bubble layout (user right-aligned, assistant left-aligned)
-- LLM backend selector (Local GGUF / HuggingFace Inference API)
+- LLM backend selector (Local AWQ / HuggingFace Inference API)
 - Clear history button
 """
 
