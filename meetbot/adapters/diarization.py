@@ -199,6 +199,21 @@ class LocalPyannoteAdapter:
             logger.error(f"Local Pyannote diarization failed: {e}")
             raise RuntimeError(f"Failed to perform local diarization: {e}") from e
 
+    def cleanup(self) -> None:
+        """Unload the Pyannote pipeline from memory and free GPU resources."""
+        if self.pipeline is not None:
+            logger.info("Unloading Pyannote diarization model")
+            del self.pipeline
+            self.pipeline = None
+
+            try:
+                import torch
+                if torch.cuda.is_available():
+                    torch.cuda.empty_cache()
+                    logger.debug("CUDA cache cleared after Pyannote unload")
+            except Exception:
+                pass
+
 
 def get_diarization_adapter() -> LocalPyannoteAdapter:
     """Factory function to get local diarization adapter."""

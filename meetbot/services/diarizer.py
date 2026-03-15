@@ -19,7 +19,7 @@ class DiarizationService:
 
     def __init__(self):
         """Initialize diarization service."""
-        pass
+        self._adapter = None
 
     def diarize(
         self,
@@ -88,6 +88,7 @@ class DiarizationService:
                 if progress_callback:
                     progress_callback("diarization", 40, "Processing audio for speaker identification...")
                 adapter = get_diarization_adapter()
+                self._adapter = adapter
                 raw = adapter.diarize_pyannote(
                     audio_path,
                     min_speakers=min_speakers,
@@ -121,3 +122,12 @@ class DiarizationService:
             "from_cache": from_cache,
             "cache_path": str(cache_path) if cache_path else None,
         }
+
+    def cleanup(self) -> None:
+        """Release GPU resources held by the diarization adapter."""
+        if self._adapter is not None:
+            try:
+                self._adapter.cleanup()
+            except Exception:
+                pass
+            self._adapter = None

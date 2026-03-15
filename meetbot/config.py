@@ -115,7 +115,7 @@ class Settings(BaseSettings):
     )
 
     LOCAL_LLM_MODEL_PATH: str = Field(
-        "./models/qwen2.5-7B",
+        "./models/qwen2.5-1.5B",
         env="LOCAL_LLM_MODEL_PATH",
         description="Path to local AWQ model directory (must contain config.json and safetensors shards)",
     )

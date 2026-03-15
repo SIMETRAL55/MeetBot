@@ -114,6 +114,17 @@ def run_pipeline(job_id: str) -> None:
 
         # ── Memory cleanup between stages ───────────────────────────────
         del transcriber_svc, transcriber_adapter
+
+        # CRITICAL: Explicitly unload the Whisper model from GPU before
+        # diarization.  The class-level singleton (_model) keeps the model
+        # in VRAM even after `del transcriber_adapter`.  Without this call,
+        # diarization will OOM on GPUs with limited VRAM (e.g. 4 GiB).
+        try:
+            from ..adapters.transcribers.local_whisper import LocalWhisperTranscriber
+            LocalWhisperTranscriber.cleanup()
+        except Exception:
+            pass  # safe to ignore if using HuggingFace backend
+
         from ..utils.memory import cleanup_memory, log_memory_usage
         cleanup_memory("post-transcription")
         if settings.MEMORY_WATCH_ENABLED:
@@ -156,6 +167,8 @@ def run_pipeline(job_id: str) -> None:
         update_job_result(db, job_id, diarization_json_path=str(diar_result_path))
 
         # ── Memory cleanup between stages ───────────────────────────────
+        # Explicitly unload Pyannote model from GPU to free VRAM for indexing
+        diarizer_svc.cleanup()
         del diarizer_svc
         cleanup_memory("post-diarization")
         if settings.MEMORY_WATCH_ENABLED:
