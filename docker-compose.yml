@@ -68,7 +68,7 @@ x-meetbot-env: &meetbot-env
   EMBEDDING_DEVICE: ${EMBEDDING_DEVICE:-cpu}
 
   # ── Model paths (must match volume mounts below) ────────────────────────
-  EMBEDDING_MODEL: /app/models/all-MiniLM-L6-v2
+  EMBEDDING_MODEL: /app/models/sarashina-model
   LOCAL_LLM_MODEL_PATH: /app/models/qwen2.5-7B
 
   # ── I/O paths (must match volume mounts below) ──────────────────────────
