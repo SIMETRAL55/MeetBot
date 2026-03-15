@@ -25,14 +25,20 @@ toolz==1.1.0                  # Functional programming utilities
 # Web Application
 # ============================================================================
 nicegui==3.8.0                # Python-based web UI framework (includes FastAPI + Uvicorn)
-sqlalchemy==2.0.46            # ORM for SQLite database
+sqlalchemy==2.0.46            # ORM for SQLite / PostgreSQL
+alembic>=1.13.0               # Database schema migrations
 bcrypt==5.0.0                 # Password hashing
+
+# PostgreSQL support (optional — only needed if DATABASE_URL points to PostgreSQL)
+# pip install psycopg2-binary
+# psycopg2-binary>=2.9.9
 
 
 # ============================================================================
 # Audio Processing & Transcription
 # ============================================================================
 openai-whisper==20250625      # OpenAI's Whisper ASR model (CPU/GPU)
+faster-whisper>=1.0.0         # CTranslate2-based Whisper (4-6x faster, 50% less VRAM)
 pydub==0.25.1                 # Audio file format conversion
 ffmpeg-python==0.2.0          # Python wrapper for ffmpeg — only version on PyPI
 

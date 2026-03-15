@@ -30,7 +30,7 @@ import json as _json
 import logging
 from typing import Literal, Optional
 
-from fastapi import HTTPException, Query as QueryParam, UploadFile, File, Form
+from fastapi import HTTPException, Query as QueryParam, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -79,25 +79,88 @@ class RegisterRequest(BaseModel):
     display_name: Optional[str] = None
 
 
+# ── Health Check ──────────────────────────────────────────────────────────────
+
+async def api_health() -> JSONResponse:
+    """Health check endpoint for container orchestration (K8s, Docker, etc.).
+
+    Returns system status including database connectivity, GPU availability,
+    queue state, and pipeline metrics.
+    """
+    import time
+    from ..workers.queue import job_queue
+    from ..logging_conf import pipeline_metrics
+
+    health = {
+        "status": "healthy",
+        "timestamp": time.time(),
+        "queue_size": job_queue.queue_size,
+        "current_job": job_queue.current_job_id,
+        "metrics": pipeline_metrics.get_summary(),
+    }
+
+    # Check database connectivity
+    try:
+        SessionLocal = get_session()
+        db = SessionLocal()
+        try:
+            db.execute(__import__("sqlalchemy").text("SELECT 1"))
+            health["database"] = "connected"
+        finally:
+            db.close()
+    except Exception as e:
+        health["database"] = f"error: {e}"
+        health["status"] = "degraded"
+
+    # Check GPU availability
+    try:
+        import torch
+        if torch.cuda.is_available():
+            free, total = torch.cuda.mem_get_info(0)
+            health["gpu"] = {
+                "available": True,
+                "free_mb": round(free / 1024 / 1024),
+                "total_mb": round(total / 1024 / 1024),
+            }
+        else:
+            health["gpu"] = {"available": False}
+    except ImportError:
+        health["gpu"] = {"available": False}
+
+    return JSONResponse(health)
+
+
 # ── Auth Handlers ─────────────────────────────────────────────────────────────
 
 async def api_auth_login(body: LoginRequest) -> JSONResponse:
-    """Authenticate user and return user info."""
+    """Authenticate user and return user info with access token."""
     from ..web.auth import authenticate_user
+    from ..web.auth_middleware import create_access_token
+
     user = authenticate_user(body.username, body.password)
     if user is None:
         raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    token = create_access_token(user.id, user.username)
     return JSONResponse({
         "user_id": user.id,
         "username": user.username,
         "display_name": user.display_name or user.username,
         "is_admin": user.is_admin,
+        "access_token": token,
+        "token_type": "bearer",
     })
 
 async def api_auth_register(body: RegisterRequest) -> JSONResponse:
-    """Register a new user account."""
+    """Register a new user account and return access token."""
     from ..web.auth import hash_password
+    from ..web.auth_middleware import create_access_token
     from ..db.crud import create_user, get_user_by_username
+
+    # Validate password strength
+    if len(body.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
     SessionLocal = get_session()
     db = SessionLocal()
     try:
@@ -109,11 +172,14 @@ async def api_auth_register(body: RegisterRequest) -> JSONResponse:
             db, body.username, hashed,
             display_name=body.display_name,
         )
+        token = create_access_token(user.id, user.username)
         return JSONResponse({
             "user_id": user.id,
             "username": user.username,
             "display_name": user.display_name or user.username,
             "is_admin": user.is_admin,
+            "access_token": token,
+            "token_type": "bearer",
         }, status_code=201)
     finally:
         db.close()
@@ -121,19 +187,33 @@ async def api_auth_register(body: RegisterRequest) -> JSONResponse:
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
 
-async def api_list_jobs() -> JSONResponse:
-    """Return list of all jobs for the first available user."""
+async def api_list_jobs(request: "Request") -> JSONResponse:
+    """Return list of all jobs for the authenticated user.
+
+    Falls back to the first user in DB if no valid token is present
+    (backward compatibility during migration to token-based auth).
+    """
+    from ..web.auth_middleware import get_optional_user
+    from fastapi import Request as _Req
+
+    token_user = get_optional_user(request)
+
     SessionLocal = get_session()
     db = SessionLocal()
     try:
-        from ..db.models import User
-        # Stub for Next.js app: get the first user to own the jobs
-        user = db.query(User).first()
-        if not user:
-            return JSONResponse([])
-        
+        if token_user:
+            user_id = token_user["sub"]
+        else:
+            # Legacy fallback: use first user (will be removed once frontend
+            # is fully migrated to token-based auth)
+            from ..db.models import User
+            user = db.query(User).first()
+            if not user:
+                return JSONResponse([])
+            user_id = user.id
+
         from ..db.crud import get_jobs_for_user
-        jobs = get_jobs_for_user(db, user.id, limit=50)
+        jobs = get_jobs_for_user(db, user_id, limit=50)
         jobs_data = []
         for job in jobs:
             jobs_data.append({
@@ -152,6 +232,7 @@ async def api_list_jobs() -> JSONResponse:
         db.close()
 
 async def api_upload_job(
+    request: "Request",
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
     min_speakers: Optional[int] = Form(None),
@@ -163,11 +244,18 @@ async def api_upload_job(
     from ..config import settings
     from ..workers.queue import job_queue
     from ..db.crud import create_job
+    from ..web.auth_middleware import get_optional_user
+
+    # Validate min/max speakers bounds
+    if min_speakers is not None and (min_speakers < 1 or min_speakers > 20):
+        raise HTTPException(status_code=422, detail="min_speakers must be between 1 and 20")
+    if max_speakers is not None and (max_speakers < 1 or max_speakers > 20):
+        raise HTTPException(status_code=422, detail="max_speakers must be between 1 and 20")
 
     original_name = file.filename
     if not original_name:
          raise HTTPException(status_code=400, detail="No filename provided")
-         
+
     file_ext = Path(original_name).suffix.lower()
     if file_ext not in settings.get_allowed_extensions():
         raise HTTPException(
@@ -175,13 +263,20 @@ async def api_upload_job(
             detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(settings.get_allowed_extensions())}"
         )
 
+    token_user = get_optional_user(request)
+
     SessionLocal = get_session()
     db = SessionLocal()
     try:
-        from ..db.models import User
-        user = db.query(User).first()
-        if not user:
-             raise HTTPException(status_code=400, detail="No user found to assign job")
+        if token_user:
+            user_id = token_user["sub"]
+        else:
+            # Legacy fallback
+            from ..db.models import User
+            user = db.query(User).first()
+            if not user:
+                raise HTTPException(status_code=400, detail="No user found to assign job")
+            user_id = user.id
              
         # Generate unique filename and save
         unique_name = f"{uuid.uuid4().hex}{file_ext}"
@@ -199,12 +294,12 @@ async def api_upload_job(
 
         job = create_job(
             db,
-            user_id=user.id,
+            user_id=user_id,
             filename=unique_name,
             original_filename=original_name,
             file_size=saved_size,
             language=language,
-            backend="local",
+            backend=settings.TRANSCRIPTION_BACKEND,
             min_speakers=min_speakers,
             max_speakers=max_speakers,
         )

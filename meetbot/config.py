@@ -105,6 +105,17 @@ class Settings(BaseSettings):
         description="Transcription backend: 'local' (GPU Whisper) or 'huggingface' (API)",
     )
 
+    WHISPER_MODEL_SIZE: str = Field(
+        "small",
+        env="WHISPER_MODEL_SIZE",
+        description=(
+            "Whisper model size for local/faster-whisper backends. "
+            "Options: tiny, base, small, medium, large-v2, large-v3. "
+            "For RTX 3050 4 GB: 'small' (recommended) or 'medium'. "
+            "'large-v3' requires ~6 GB VRAM and will OOM on 4 GB cards."
+        ),
+    )
+
     # =========================================================================
     # Local LLM Configuration (AWQ quantized models via transformers + autoawq)
     # =========================================================================
@@ -383,15 +394,19 @@ class Settings(BaseSettings):
     )
 
     WEB_SECRET_KEY: str = Field(
-        "meetbot-change-this-secret-key-in-production",
+        "",
         env="WEB_SECRET_KEY",
-        description="Secret key for session encryption (CHANGE IN PRODUCTION)",
+        description="Secret key for JWT signing and session encryption. "
+                    "A random key is generated if not set, but this means "
+                    "tokens are invalidated on every restart. "
+                    "Set via WEB_SECRET_KEY env var in production.",
     )
 
     WEB_STORAGE_SECRET: str = Field(
-        "meetbot-storage-secret-change-me",
+        "",
         env="WEB_STORAGE_SECRET",
-        description="Secret key for NiceGUI user storage encryption",
+        description="Secret key for NiceGUI user storage encryption. "
+                    "A random key is generated if not set.",
     )
 
     MAX_UPLOAD_SIZE_MB: int = Field(
@@ -422,6 +437,34 @@ class Settings(BaseSettings):
         "env_file_encoding": "utf-8",
         "extra": "ignore",  # Allow unknown env vars without failing
     }
+
+    def model_post_init(self, __context) -> None:
+        """Generate random secrets if not provided; warn about insecure defaults."""
+        import logging
+        import secrets
+        _log = logging.getLogger("meetbot.config")
+
+        _insecure_defaults = {
+            "meetbot-change-this-secret-key-in-production",
+            "meetbot-storage-secret-change-me",
+        }
+
+        if not self.WEB_SECRET_KEY or self.WEB_SECRET_KEY in _insecure_defaults:
+            generated = secrets.token_urlsafe(32)
+            object.__setattr__(self, "WEB_SECRET_KEY", generated)
+            _log.warning(
+                "WEB_SECRET_KEY not set — generated a random key. "
+                "Tokens will be invalidated on restart. "
+                "Set WEB_SECRET_KEY env var for persistence."
+            )
+
+        if not self.WEB_STORAGE_SECRET or self.WEB_STORAGE_SECRET in _insecure_defaults:
+            generated = secrets.token_urlsafe(32)
+            object.__setattr__(self, "WEB_STORAGE_SECRET", generated)
+            _log.warning(
+                "WEB_STORAGE_SECRET not set — generated a random key. "
+                "Set WEB_STORAGE_SECRET env var for persistence."
+            )
 
     # =========================================================================
     # Helper Methods

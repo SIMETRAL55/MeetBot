@@ -61,6 +61,7 @@ def _register_pages() -> None:
 
     # Register REST API endpoints.
     from .api import (
+        api_health,
         api_list_jobs,
         api_upload_job,
         api_delete_job,
@@ -76,6 +77,7 @@ def _register_pages() -> None:
         api_auth_register,
         api_get_chat_history,
     )
+    app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
     app.add_api_route("/api/auth/register",          api_auth_register, methods=["POST"])
     app.add_api_route("/api/jobs",                   api_list_jobs,    methods=["GET"])

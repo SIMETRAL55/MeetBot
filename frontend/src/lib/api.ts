@@ -19,6 +19,32 @@ export function getWsBaseUrl(): string {
   }
 }
 
+/**
+ * Get the stored access token from localStorage.
+ */
+function getAccessToken(): string | null {
+  if (typeof window === "undefined") return null;
+  try {
+    const userJson = localStorage.getItem("meetbot_user");
+    if (!userJson) return null;
+    const user = JSON.parse(userJson);
+    return user.access_token || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Build authorization headers if a token is available.
+ */
+function authHeaders(): Record<string, string> {
+  const token = getAccessToken();
+  if (token) {
+    return { Authorization: `Bearer ${token}` };
+  }
+  return {};
+}
+
 export class ApiError extends Error {
   constructor(public status: number, message: string) {
     super(message);
@@ -33,6 +59,7 @@ async function fetcher<T>(endpoint: string, options?: RequestInit): Promise<T> {
       ...options,
       headers: {
         "Accept": "application/json",
+        ...authHeaders(),
         ...options?.headers,
       },
     });
@@ -69,15 +96,25 @@ async function fetcher<T>(endpoint: string, options?: RequestInit): Promise<T> {
   // Handle empty responses
   const text = await response.text();
   if (!text) return {} as T;
-  
+
   return JSON.parse(text) as T;
+}
+
+// Auth response type that includes the access token
+interface AuthResponse {
+  user_id: string;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+  access_token: string;
+  token_type: string;
 }
 
 export const api = {
   // --- Dashboard / Job List ---
-  
+
   getJobs: () => fetcher<Job[]>("/jobs"),
-  
+
   uploadJob: async (file: File, options?: { language?: string, minSpeakers?: number, maxSpeakers?: number }) => {
     const formData = new FormData();
     formData.append("file", file);
@@ -106,7 +143,7 @@ export const api = {
     if (!raw.id && raw.job_id) raw.id = raw.job_id;
     return raw as unknown as Job;
   },
-  
+
   cancelJob: (jobId: string) => fetcher<{ job_id: string; status: string; message: string }>(`/jobs/${jobId}/cancel`, {
     method: "POST"
   }),
@@ -152,24 +189,26 @@ export const api = {
       body: JSON.stringify({ q: query, llm_mode: llmMode }),
     });
   },
-  
+
   getChatHistory: (jobId: string) => fetcher<import("../types").ChatMessage[]>(`/jobs/${jobId}/chat/history`),
 
   // --- Auth ---
 
-  login: (username: string, password: string) => {
-    return fetcher<{ user_id: string; username: string; display_name: string; is_admin: boolean }>("/auth/login", {
+  login: async (username: string, password: string) => {
+    const result = await fetcher<AuthResponse>("/auth/login", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password }),
     });
+    return result;
   },
 
-  register: (username: string, password: string, displayName?: string) => {
-    return fetcher<{ user_id: string; username: string; display_name: string; is_admin: boolean }>("/auth/register", {
+  register: async (username: string, password: string, displayName?: string) => {
+    const result = await fetcher<AuthResponse>("/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ username, password, display_name: displayName }),
     });
+    return result;
   },
 };

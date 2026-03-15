@@ -21,23 +21,17 @@ def get_transcriber(backend: Optional[str] = None, **kwargs) -> BaseTranscriber:
     3. Default to 'huggingface'
 
     Args:
-        backend: Backend type ('local' or 'huggingface'). If None, reads from
-                 TRANSCRIPTION_BACKEND env var or defaults to 'huggingface'.
+        backend: Backend type ('local', 'faster-whisper', or 'huggingface').
+                 If None, reads from TRANSCRIPTION_BACKEND env var or defaults
+                 to 'huggingface'.
         **kwargs: Backend-specific keyword arguments
 
     Returns:
-        BaseTranscriber instance (LocalWhisperTranscriber or HuggingFaceTranscriber)
+        BaseTranscriber instance
 
     Raises:
         ValueError: If backend is unknown
         RuntimeError: If backend initialization fails
-
-    Example:
-        # Use environment variable
-        transcriber = get_transcriber()
-
-        # Override with explicit backend
-        transcriber = get_transcriber(backend="local", model_size="base")
     """
     if backend is None:
         backend = os.getenv("TRANSCRIPTION_BACKEND", "huggingface").lower()
@@ -46,21 +40,32 @@ def get_transcriber(backend: Optional[str] = None, **kwargs) -> BaseTranscriber:
 
     if backend == "local":
         logger.debug("Using LocalWhisperTranscriber")
-        # Extract local-specific kwargs
-        model_size = kwargs.pop("model_size", "small")
+        from meetbot.config import settings as _settings
+        model_size = kwargs.pop("model_size", _settings.WHISPER_MODEL_SIZE)
         device = kwargs.pop("device", None)
         return LocalWhisperTranscriber(model_size=model_size, device=device)
 
+    elif backend == "faster-whisper":
+        logger.debug("Using FasterWhisperTranscriber")
+        from .faster_whisper import FasterWhisperTranscriber
+        from meetbot.config import settings as _settings
+        model_size = kwargs.pop("model_size", _settings.WHISPER_MODEL_SIZE)
+        device = kwargs.pop("device", None)
+        compute_type = kwargs.pop("compute_type", None)
+        return FasterWhisperTranscriber(
+            model_size=model_size, device=device, compute_type=compute_type,
+        )
+
     elif backend == "huggingface":
         logger.debug("Using HuggingFaceTranscriber")
-        # Extract HF-specific kwargs
         token = kwargs.pop("token", None)
         provider = kwargs.pop("provider", "fal-ai")
         return HuggingFaceTranscriber(token=token, provider=provider)
 
     else:
         raise ValueError(
-            f"Unknown transcription backend: {backend}. Valid values: 'local', 'huggingface'"
+            f"Unknown transcription backend: {backend}. "
+            f"Valid values: 'local', 'faster-whisper', 'huggingface'"
         )
 
 

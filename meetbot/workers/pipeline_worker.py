@@ -84,6 +84,7 @@ def run_pipeline(job_id: str) -> None:
 
         from ..services.transcriber import TranscriberService
         from ..adapters.transcribers import get_transcriber_from_cli_arg
+        from ..logging_conf import StageTimer, pipeline_metrics
 
         transcriber_adapter = get_transcriber_from_cli_arg(backend_arg=job.backend)
         transcriber_svc = TranscriberService(transcriber=transcriber_adapter)
@@ -94,12 +95,13 @@ def run_pipeline(job_id: str) -> None:
             _stage_update(db, job_id, JobStatus.TRANSCRIBING, progress_cb,
                           overall=overall, stage=pct, msg=msg)
 
-        transcription = transcriber_svc.transcribe(
-            audio_path,
-            language=job.language,
-            use_cache=True,
-            progress_callback=transcribe_progress,
-        )
+        with StageTimer("transcription", job_id=job_id):
+            transcription = transcriber_svc.transcribe(
+                audio_path,
+                language=job.language,
+                use_cache=True,
+                progress_callback=transcribe_progress,
+            )
         n_trans_segments = len(transcription.get("segments", []))
         done_msg = f"Transcription done — {n_trans_segments} segments"
         logger.info(f"Job {job_id[:8]}: {done_msg}")
@@ -125,6 +127,12 @@ def run_pipeline(job_id: str) -> None:
         except Exception:
             pass  # safe to ignore if using HuggingFace backend
 
+        try:
+            from ..adapters.transcribers.faster_whisper import FasterWhisperTranscriber
+            FasterWhisperTranscriber.cleanup()
+        except Exception:
+            pass  # safe to ignore if not using faster-whisper
+
         from ..utils.memory import cleanup_memory, log_memory_usage
         cleanup_memory("post-transcription")
         if settings.MEMORY_WATCH_ENABLED:
@@ -147,13 +155,14 @@ def run_pipeline(job_id: str) -> None:
             _stage_update(db, job_id, JobStatus.DIARIZING, progress_cb,
                           overall=overall, stage=pct, msg=msg)
 
-        diarization = diarizer_svc.diarize(
-            audio_path,
-            min_speakers=job.min_speakers,
-            max_speakers=job.max_speakers,
-            use_cache=True,
-            progress_callback=diarize_progress,
-        )
+        with StageTimer("diarization", job_id=job_id):
+            diarization = diarizer_svc.diarize(
+                audio_path,
+                min_speakers=job.min_speakers,
+                max_speakers=job.max_speakers,
+                use_cache=True,
+                progress_callback=diarize_progress,
+            )
         n_dia_segments = len(diarization.get("segments", []))
         done_msg = f"Diarization done — {n_dia_segments} speaker segments"
         logger.info(f"Job {job_id[:8]}: {done_msg}")
@@ -323,6 +332,7 @@ def run_pipeline(job_id: str) -> None:
             message="Processing complete", stage_progress=100, status="completed",
         )
         logger.info(f"Job {job_id[:8]}: Pipeline complete")
+        pipeline_metrics.record_job_complete()
 
     except JobCancelledError:
         logger.info("Job %s cancelled at stage boundary", job_id[:8])
@@ -333,6 +343,7 @@ def run_pipeline(job_id: str) -> None:
         tb = traceback.format_exc()
         logger.error(f"Job {job_id[:8]} failed: {error_msg}\n{tb}")
         _fail_job(db, job_id, error_msg, progress_cb)
+        pipeline_metrics.record_error()
 
     finally:
         cancel_registry.clear(job_id)  # remove flag regardless of outcome
