@@ -379,6 +379,64 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
+    # PageIndex Configuration (vectorless LLM-based retrieval — optional)
+    # =========================================================================
+    PAGEINDEX_ENABLED: bool = Field(
+        False,
+        env="PAGEINDEX_ENABLED",
+        description="Master toggle for PageIndex integration. When False, all "
+                    "PageIndex features are disabled (zero regression risk).",
+    )
+
+    PAGEINDEX_AUTO_INDEX: bool = Field(
+        False,
+        env="PAGEINDEX_AUTO_INDEX",
+        description="Automatically build PageIndex during pipeline ingestion "
+                    "(Stage 4b). When False, PageIndex must be triggered manually "
+                    "via the 'Build PageIndex' button or API endpoint.",
+    )
+
+    PAGEINDEX_LLM_BACKEND: str = Field(
+        "openrouter",
+        env="PAGEINDEX_LLM_BACKEND",
+        description="LLM backend for PageIndex calls: 'openrouter' (recommended, "
+                    "free), 'local' (Ollama offline fallback), 'openai', or 'custom'.",
+    )
+
+    PAGEINDEX_LLM_BASE_URL: str = Field(
+        "https://openrouter.ai/api/v1",
+        env="PAGEINDEX_LLM_BASE_URL",
+        description="OpenAI-compatible API base URL for PageIndex LLM calls. "
+                    "Auto-set for 'openrouter' and 'openai' backends.",
+    )
+
+    PAGEINDEX_LLM_MODEL: str = Field(
+        "qwen/qwen3-next-80b-a3b-instruct:free",
+        env="PAGEINDEX_LLM_MODEL",
+        description="Model ID for PageIndex LLM calls. Default is the free "
+                    "Qwen3 80B MoE on OpenRouter. Use 'qwen2.5:3b' for local fallback.",
+    )
+
+    PAGEINDEX_LLM_API_KEY: str = Field(
+        "",
+        env="PAGEINDEX_LLM_API_KEY",
+        description="API key for the PageIndex LLM backend. Required for "
+                    "OpenRouter/OpenAI. Use 'not-needed' for local servers.",
+    )
+
+    PAGEINDEX_MAX_PAGE_TOKENS: int = Field(
+        20000,
+        env="PAGEINDEX_MAX_PAGE_TOKENS",
+        description="Maximum tokens per tree node during PageIndex indexing.",
+    )
+
+    PAGEINDEX_OUTPUT_DIR: str = Field(
+        "./db/pageindex",
+        env="PAGEINDEX_OUTPUT_DIR",
+        description="Directory for storing PageIndex JSON tree files.",
+    )
+
+    # =========================================================================
     # Web Application Configuration
     # =========================================================================
     WEB_HOST: str = Field(
@@ -515,6 +573,23 @@ class Settings(BaseSettings):
     def get_vector_db_path(self) -> Path:
         """Get vector database path as pathlib.Path."""
         return Path(self.VECTOR_DB_PATH).expanduser().resolve()
+
+    def get_pageindex_base_url(self) -> str:
+        """Resolve the LLM base URL based on the configured backend."""
+        _backend_urls = {
+            "openrouter": "https://openrouter.ai/api/v1",
+            "openai": "https://api.openai.com/v1",
+            "local": "http://localhost:11434/v1",
+        }
+        if self.PAGEINDEX_LLM_BASE_URL:
+            return self.PAGEINDEX_LLM_BASE_URL
+        return _backend_urls.get(self.PAGEINDEX_LLM_BACKEND, "https://openrouter.ai/api/v1")
+
+    def get_pageindex_output_dir(self) -> Path:
+        """Get PageIndex output directory as pathlib.Path, creating if needed."""
+        p = Path(self.PAGEINDEX_OUTPUT_DIR).expanduser().resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
 
     def get_cache_dir(self) -> Path:
         """Get cache directory path as pathlib.Path."""
