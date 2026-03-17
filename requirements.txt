@@ -104,6 +104,17 @@ accelerate                    # HuggingFace Accelerate for device_map support
 
 
 # ============================================================================
+# PageIndex (vectorless LLM-based retrieval — optional)
+# PageIndex is NOT pip-installable. Clone the repo and add to PYTHONPATH:
+#   git clone https://github.com/VectifyAI/PageIndex.git vendor/pageindex_repo
+#   echo "$PWD/vendor/pageindex_repo" >> venv/lib/python3.12/site-packages/pageindex.pth
+# ============================================================================
+openai>=1.50.0                # OpenAI-compatible API client (used by PageIndex)
+tiktoken>=0.7.0               # Token counting for PageIndex
+pyyaml>=6.0                   # YAML config loading for PageIndex
+
+
+# ============================================================================
 # Development & Testing (not needed in production)
 # ============================================================================
 pytest==9.0.2                 # Testing framework
