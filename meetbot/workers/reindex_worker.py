@@ -265,6 +265,46 @@ def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
     # Update DB
     update_job_result(db, job_id, db_dir=db_dir)
 
+    # ── PageIndex rebuild (optional, conditional) ─────────────────────────
+    if settings.PAGEINDEX_ENABLED:
+        _stage(96, 96, "Rebuilding PageIndex tree...")
+        try:
+            from ..services.rag.indexer_pageindex import PageIndexAdapter
+
+            adapter = PageIndexAdapter()
+            original_filename = getattr(job, "original_filename", "Untitled")
+
+            job.pageindex_status = "building"
+            db.commit()
+
+            import asyncio as _aio
+            loop = _aio.new_event_loop()
+            try:
+                pi_path = loop.run_until_complete(
+                    adapter.build_index(
+                        segments=seg_dicts,
+                        job_id=job_id,
+                        filename=original_filename,
+                    )
+                )
+            finally:
+                loop.close()
+
+            job.pageindex_path = str(pi_path)
+            job.pageindex_status = "ready"
+            db.commit()
+            logger.info("run_reindex_v2: PageIndex rebuilt for job %s", job_id[:8])
+        except Exception as pi_exc:
+            # PageIndex failure should NOT fail the reindex
+            logger.warning(
+                "run_reindex_v2: PageIndex rebuild failed (non-fatal): %s", pi_exc
+            )
+            try:
+                job.pageindex_status = "failed"
+                db.commit()
+            except Exception:
+                pass
+
     progress_cb = progress_manager.make_callback(job_id)
     progress_cb("completed", 100, "Reindex complete (v2)", 100.0)
     update_job_status(

@@ -966,6 +966,8 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
         abort_event: Optional[threading.Event] = None,
         retrieval_level: Optional[str] = None,
         segment_count: Optional[int] = None,
+        retrieval_method: Optional[str] = None,
+        job_id: Optional[str] = None,
     ) -> Iterator[Dict[str, Any]]:
         """
         RAG query with two-stage retrieval, MMR reranking, and
@@ -999,6 +1001,19 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
         from .rag.retriever import Retriever
         from .rag.reranker import Reranker
         from .rag.selector import Selector
+
+        # ── PageIndex retrieval path (alternative pipeline) ───────────────
+        if retrieval_method == "pageindex" and job_id:
+            yield from self._query_stream_pageindex(
+                question=question,
+                db_dir=db_dir,
+                job_id=job_id,
+                llm_mode=llm_mode,
+                hf_model=hf_model,
+                embedding_model=embedding_model,
+                abort_event=abort_event,
+            )
+            return
 
         # ── Determine retrieval level ─────────────────────────────────────
         # Use explicit UI-provided level; default to "chunk" for backward
@@ -1173,4 +1188,143 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
             "filtered_sources":    filtered_sources,
             "filtering_available": filtering_ok,
             "retrieval_level":     level,
+            "retrieval_method":    "vector",
+        }
+
+    # ------------------------------------------------------------------
+    # PageIndex retrieval pipeline
+    # ------------------------------------------------------------------
+    def _query_stream_pageindex(
+        self,
+        question: str,
+        db_dir: str,
+        job_id: str,
+        llm_mode: LLMMode = "local",
+        hf_model: str = "deepseek-ai/DeepSeek-V3.1",
+        embedding_model: str = "./models/all-MiniLM-L6-v2",
+        abort_event: Optional[threading.Event] = None,
+    ) -> Iterator[Dict[str, Any]]:
+        """
+        PageIndex retrieval pipeline — alternative to the vector path.
+
+        1. Load the PageIndex tree from disk
+        2. Run LLM tree-search to find relevant nodes
+        3. Collect segment text from matched nodes
+        4. Build prompt and stream LLM generation (same as vector path)
+        5. Emit done event with PageIndex metadata
+        """
+        from ..config import settings as _s
+        from .rag.indexer_pageindex import PageIndexAdapter
+        from .rag.retriever_pageindex import PageIndexRetriever
+
+        logger.info("query_stream_pageindex: job=%s query=%r", job_id[:8], question[:60])
+
+        # Step 1: Load tree
+        try:
+            adapter = PageIndexAdapter()
+            tree = adapter.load_index(job_id)
+        except FileNotFoundError:
+            yield {"type": "error", "data": "PageIndex tree not found for this job. Build it first."}
+            return
+        except Exception as exc:
+            yield {"type": "error", "data": f"Failed to load PageIndex tree: {exc}"}
+            return
+
+        # Step 2: Load segments from DB
+        from ..db.database import get_session
+        from ..db.crud import get_segments_for_job
+        SessionLocal = get_session()
+        db = SessionLocal()
+        try:
+            segments = get_segments_for_job(db, job_id)
+            if not segments:
+                yield {"type": "error", "data": "No transcript segments found"}
+                return
+            seg_dicts = [s.to_dict() for s in segments]
+        finally:
+            db.close()
+
+        # Step 3: LLM tree search
+        try:
+            retriever = PageIndexRetriever()
+            import asyncio as _aio
+            loop = _aio.new_event_loop()
+            try:
+                matched_sources = loop.run_until_complete(
+                    retriever.search(query=question, tree=tree, segments=seg_dicts)
+                )
+            finally:
+                loop.close()
+        except Exception as exc:
+            logger.error("PageIndex tree search failed: %s", exc)
+            yield {"type": "error", "data": f"PageIndex tree search failed: {exc}"}
+            return
+
+        if not matched_sources:
+            yield {"type": "error", "data": "PageIndex found no relevant sections"}
+            return
+
+        # Emit sources
+        yield {"type": "sources", "data": matched_sources}
+
+        # Step 4: Build context and stream LLM
+        context_text = "\n\n---\n\n".join(
+            f"[{s.get('speaker', '?')} "
+            f"{s.get('start', '?')}-{s.get('end', '?')}] {s.get('text', '')}"
+            for s in matched_sources
+        )
+
+        system_msg = (
+            "You are a helpful assistant. Answer the user's question using only "
+            "the provided context. If the answer is not in the context, say so."
+        )
+        user_content = f"{context_text}\n\nQuestion: {question}"
+        prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
+        messages = [
+            {"role": "system", "content": system_msg},
+            {"role": "user",   "content": user_content},
+        ]
+
+        full_answer = ""
+        stopped = False
+        try:
+            if llm_mode == "local":
+                adapter_llm = self._get_local_adapter()
+                token_iter = adapter_llm.generate_stream(
+                    prompt=prompt,
+                    max_tokens=_s.LOCAL_LLM_MAX_TOKENS,
+                    temperature=_s.LOCAL_LLM_TEMPERATURE,
+                    messages=messages,
+                )
+            else:
+                hf_adapter = _get_hf_adapter(hf_model)
+                hf_prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
+                token_iter = hf_adapter.generate_stream(prompt=hf_prompt)
+
+            for token in token_iter:
+                if abort_event is not None and abort_event.is_set():
+                    stopped = True
+                    break
+                full_answer += token
+                yield {"type": "token", "data": token}
+
+        except Exception as exc:
+            logger.error("query_stream_pageindex generation error: %s", exc)
+            yield {"type": "error", "data": str(exc)}
+            return
+
+        # Collect node IDs from matched sources
+        pageindex_nodes = list(dict.fromkeys(
+            s.get("node_id", "") for s in matched_sources if s.get("node_id")
+        ))
+
+        yield {
+            "type":                "done",
+            "llm_backend":         llm_mode,
+            "full_answer":         full_answer,
+            "stopped":             stopped,
+            "filtered_sources":    matched_sources,
+            "filtering_available": False,
+            "retrieval_method":    "pageindex",
+            "pageindex_nodes":     pageindex_nodes,
         }
