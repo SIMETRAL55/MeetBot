@@ -156,6 +156,10 @@ export const api = {
     method: "POST"
   }),
 
+  buildPageIndex: (jobId: string) => fetcher<{ job_id: string; status: string; message: string }>(`/jobs/${jobId}/build-pageindex`, {
+    method: "POST"
+  }),
+
   /** Return the URL that the browser should use to stream the audio file. */
   getAudioUrl: (jobId: string): string => `${API_BASE_URL}/jobs/${jobId}/audio`,
 

@@ -22,6 +22,7 @@ export interface Job {
   duration_seconds?: number | null;
   file_size?: number | null;
   created_at?: string;
+  pageindex_status?: string | null;  // "pending" | "building" | "ready" | "failed" | null
 }
 
 export interface Segment {
@@ -39,6 +40,8 @@ export interface ChatSource {
   text: string;
   distance: number;
   relevance: string;
+  node_title?: string;  // PageIndex section title
+  node_id?: string;     // PageIndex node ID
 }
 
 export interface ChatMessage {

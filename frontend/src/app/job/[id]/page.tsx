@@ -8,7 +8,7 @@ import { ProgressTimeline } from "@/components/ProgressTimeline";
 import { TranscriptEditor } from "@/components/TranscriptEditor";
 import { AudioPlayer, AudioPlayerHandle } from "@/components/AudioPlayer";
 import { useJobProgressWS } from "@/lib/hooks/useJobProgressWS";
-import { Download, RotateCcw, Loader2, XCircle } from "lucide-react";
+import { Download, RotateCcw, Loader2, XCircle, Network } from "lucide-react";
 
 export default function JobDetailPage() {
   const { id } = useParams() as { id: string };
@@ -26,19 +26,14 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true);
   const [reindexing, setReindexing] = useState(false);
   const [cancelling, setCancelling] = useState(false);
+  const [buildingPageIndex, setBuildingPageIndex] = useState(false);
 
-  // Only open a WebSocket for jobs that are still actively processing.
-  // For completed / failed / cancelled jobs, the initial REST fetch via
-  // fetchJob() already supplies the final state, so a WS connection is
-  // unnecessary and causes a "WS 4005: job already completed" error.
   const ACTIVE_JOB_STATUSES = ["pending", "transcribing", "diarizing", "aligning", "indexing", "reindexing"];
   const wsEnabled = !job || ACTIVE_JOB_STATUSES.includes(job.status);
 
-  // FIX: Destructure `reconnect` so we can force a new WS connection after reindex/restart.
   const { data: wsData, error: wsError, connected, reconnect: reconnectWS } = useJobProgressWS(id, wsEnabled);
 
   const fetchJob = async () => {
-    // Guard: id may be undefined during Next.js hydration before params resolve
     if (!id) return;
     try {
        const res = await api.getJobStatus(id);
@@ -56,16 +51,12 @@ export default function JobDetailPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // FIX: When WS reports completed/failed, refresh job from API so the page
-  // shows the completed state (transcript editor, download buttons, etc.)
   useEffect(() => {
     if (
       wsData?.status === "completed" ||
       wsData?.status === "failed" ||
       wsData?.status === "cancelled"
     ) {
-      // Terminal state delivered via WS — refresh DB state so the page reflects
-      // the real final status rather than relying only on WS payload.
       fetchJob();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -76,8 +67,6 @@ export default function JobDetailPage() {
     try {
       setReindexing(true);
       await api.reindexJob(job.id);
-      // After reindex starts, refresh job status and reconnect WS so we
-      // stream reindexing progress events from the new active worker.
       await fetchJob();
       reconnectWS();
     } catch (err: unknown) {
@@ -92,7 +81,6 @@ export default function JobDetailPage() {
     try {
       setCancelling(true);
       await api.cancelJob(job.id);
-      // Refresh to pick up the new "cancelled" status from the DB.
       await fetchJob();
     } catch (err: unknown) {
       alert((err as Error).message || "Cancel failed");
@@ -101,8 +89,23 @@ export default function JobDetailPage() {
     }
   };
 
+  const handleBuildPageIndex = async () => {
+    if (!job?.id || buildingPageIndex) return;
+    try {
+      setBuildingPageIndex(true);
+      await api.buildPageIndex(job.id);
+      // Poll for completion by refreshing after a short delay
+      setTimeout(async () => {
+        await fetchJob();
+        setBuildingPageIndex(false);
+      }, 3000);
+    } catch (err: unknown) {
+      alert((err as Error).message || "Build PageIndex failed");
+      setBuildingPageIndex(false);
+    }
+  };
+
   const handleDownload = (type: "aligned" | "transcription" | "diarization") => {
-    // FIX: Use API_BASE_URL from environment instead of hardcoded localhost
     const apiBase = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
     window.open(`${apiBase}/jobs/${id}/download?type=${type}`, "_blank");
   };
@@ -120,18 +123,18 @@ export default function JobDetailPage() {
      );
   }
 
-  // FIX: Compute display name from job metadata — show original filename
-  // instead of raw UUID hash. The hash is only used internally as an ID.
   const displayName = job?.original_filename || "Job Details";
   const isReindexing = job?.status === "reindexing";
-  // Show completed-state panels when job is done or actively reindexing
-  // (transcript and downloads are still valid while reindex runs).
   const isCompleted = job?.status === "completed" || isReindexing;
+
+  const pageindexStatus = job?.pageindex_status;
+  const pageindexReady = pageindexStatus === "ready";
+  const pageindexBuilding = pageindexStatus === "building" || buildingPageIndex;
+  const pageindexFailed = pageindexStatus === "failed";
 
   return (
     <div className="mx-auto max-w-5xl">
        <div className="mb-4 text-xs font-semibold uppercase tracking-wider text-slate-500">
-          {/* FIX: Show filename instead of hash ID. ID shown only as secondary info. */}
           {displayName}
           {!connected && (
              <span className="ml-2 inline-flex items-center text-yellow-500">
@@ -152,7 +155,7 @@ export default function JobDetailPage() {
           onReconnect={reconnectWS}
        />
 
-       {/* ── Completed-job actions: Downloads + Reindex ── */}
+       {/* ── Completed-job actions ── */}
        {isCompleted && (
          <div className="mt-8 grid gap-4 sm:grid-cols-2">
            {/* Download Panel */}
@@ -190,7 +193,6 @@ export default function JobDetailPage() {
                Reindex
              </h3>
              {isReindexing ? (
-               /* While reindexing: show progress indicator + cancel button */
                <div className="space-y-3">
                  <div className="flex items-center gap-2 text-sm text-orange-300">
                    <Loader2 className="h-4 w-4 animate-spin" />
@@ -209,7 +211,6 @@ export default function JobDetailPage() {
                  </button>
                </div>
              ) : (
-               /* Idle state: rebuild button */
                <>
                  <p className="mb-4 text-sm leading-relaxed text-slate-400">
                    Rebuild the RAG vector index after editing transcript segments.
@@ -229,16 +230,80 @@ export default function JobDetailPage() {
                </>
              )}
            </div>
+
+           {/* PageIndex Panel — only shown when job is completed */}
+           {job?.status === "completed" && (
+             <div className="rounded-xl border border-white/10 bg-slate-900/50 p-6 backdrop-blur sm:col-span-2 lg:col-span-1">
+               <h3 className="mb-4 flex items-center gap-2 text-lg font-semibold text-slate-200">
+                 <Network className="h-5 w-5 text-amber-400" />
+                 PageIndex
+                 {pageindexReady && (
+                   <span className="ml-auto rounded-full bg-amber-500/10 px-2 py-0.5 text-xs font-semibold text-amber-400 ring-1 ring-amber-500/20">
+                     Ready
+                   </span>
+                 )}
+                 {pageindexBuilding && (
+                   <span className="ml-auto rounded-full bg-slate-700 px-2 py-0.5 text-xs text-slate-400">
+                     Building…
+                   </span>
+                 )}
+                 {pageindexFailed && (
+                   <span className="ml-auto rounded-full bg-red-500/10 px-2 py-0.5 text-xs text-red-400 ring-1 ring-red-500/20">
+                     Failed
+                   </span>
+                 )}
+               </h3>
+
+               {pageindexBuilding ? (
+                 <div className="flex items-center gap-2 text-sm text-amber-300">
+                   <Loader2 className="h-4 w-4 animate-spin" />
+                   Building PageIndex tree… this may take a few minutes.
+                 </div>
+               ) : pageindexReady ? (
+                 <div className="space-y-3">
+                   <p className="text-sm text-slate-400">
+                     PageIndex tree is built. Select <span className="font-semibold text-amber-400">PageIndex</span> in the chat to use it.
+                   </p>
+                   <button
+                     onClick={handleBuildPageIndex}
+                     className="flex w-full items-center justify-center gap-2 rounded-md border border-amber-500/30 bg-amber-500/10 py-2 text-sm font-medium text-amber-400 transition-colors hover:bg-amber-500/20"
+                   >
+                     <RotateCcw className="h-4 w-4" /> Rebuild PageIndex
+                   </button>
+                 </div>
+               ) : (
+                 <>
+                   <p className="mb-4 text-sm leading-relaxed text-slate-400">
+                     Build a vectorless LLM-based tree index for this transcript.
+                     Requires <code className="rounded bg-slate-800 px-1 text-xs text-amber-300">PAGEINDEX_ENABLED=true</code> in your environment.
+                     {pageindexFailed && (
+                       <span className="mt-1 block text-red-400">Previous build failed. Try again.</span>
+                     )}
+                   </p>
+                   <button
+                     onClick={handleBuildPageIndex}
+                     disabled={buildingPageIndex}
+                     className="flex w-full items-center justify-center gap-2 rounded-md bg-amber-500 py-2 text-sm font-medium text-white transition-colors hover:bg-amber-400 disabled:opacity-50 shadow-[0_0_15px_rgba(245,158,11,0.2)]"
+                   >
+                     {buildingPageIndex ? (
+                       <><Loader2 className="h-4 w-4 animate-spin" /> Starting…</>
+                     ) : (
+                       <><Network className="h-4 w-4" /> Build PageIndex</>
+                     )}
+                   </button>
+                 </>
+               )}
+             </div>
+           )}
          </div>
        )}
 
-       {/* Transcript Editor Section — shown for completed jobs; placeholder while processing */}
+       {/* Transcript Editor Section */}
        {isCompleted ? (
           <div className="mt-8">
              <div className="mb-4 flex items-center justify-between">
                <h2 className="text-xl font-bold tracking-tight text-white drop-shadow-sm">Transcript Editor</h2>
              </div>
-             {/* Audio player — click timestamps in the transcript to seek */}
              <AudioPlayer
                ref={audioPlayerRef}
                src={api.getAudioUrl(id)}

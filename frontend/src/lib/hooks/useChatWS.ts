@@ -9,7 +9,8 @@ import { api, getWsBaseUrl } from "@/lib/api";
  *
  * The backend's /ws/chat/{job_id} endpoint is one-shot:
  *   1. Client connects.
- *   2. Client sends one JSON message: { question, llm_mode, retrieval_level, segment_count }.
+ *   2. Client sends one JSON message:
+ *      { question, llm_mode, retrieval_level, segment_count, retrieval_method }.
  *   3. Server streams back: sources → token* → done.
  *   4. Server closes the connection.
  *
@@ -30,11 +31,6 @@ export function useChatWS(jobId: string) {
     setFetchingHistory(true);
     setError(null);
     try {
-      // FIX: getChatHistory calls GET /api/jobs/{job_id}/chat/history which
-      // invokes get_or_create_chat_session on the backend, ensuring the
-      // ChatSession record exists BEFORE any WebSocket connection is opened.
-      // This prevents FOREIGN KEY constraint violations when the WS handler
-      // tries to create ChatMessage rows referencing a non-existent session.
       const history = await api.getChatHistory(jobId);
       setMessages(history);
     } catch (err: any) {
@@ -59,10 +55,10 @@ export function useChatWS(jobId: string) {
       llmMode: "local" | "hf" = "local",
       retrievalLevel: "chunk" | "segment" | "document" = "chunk",
       segmentCount?: number,
+      retrievalMethod: "vector" | "pageindex" = "vector",
     ) => {
       if (!question.trim() || !jobId) return;
 
-      // Optimistically add user message
       setMessages((prev) => [...prev, { role: "user", content: question }]);
       setError(null);
       setLoading(true);
@@ -70,18 +66,17 @@ export function useChatWS(jobId: string) {
       // Add an empty assistant message we'll fill with streaming tokens
       setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
 
-      // FIX: Use configurable WS base URL instead of hardcoded localhost
       const wsUrl = `${getWsBaseUrl()}/ws/chat/${jobId}`;
       const ws = new WebSocket(wsUrl);
       wsRef.current = ws;
 
       ws.onopen = () => {
         setConnected(true);
-        // Immediately send the question — the backend expects it right away
         const payload: Record<string, unknown> = {
           question,
           llm_mode: llmMode,
           retrieval_level: retrievalLevel,
+          retrieval_method: retrievalMethod,
         };
         if (retrievalLevel === "segment" && segmentCount != null) {
           payload.segment_count = segmentCount;
@@ -95,7 +90,6 @@ export function useChatWS(jobId: string) {
 
           switch (payload.type) {
             case "sources":
-              // Attach sources to the latest assistant message
               setMessages((prev) => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
@@ -107,7 +101,6 @@ export function useChatWS(jobId: string) {
               break;
 
             case "token":
-              // Append token text — the backend sends { type:"token", data:"<text>" }
               setMessages((prev) => {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
@@ -122,10 +115,7 @@ export function useChatWS(jobId: string) {
               break;
 
             case "done":
-              // Replace the initial unfiltered sources with the answer-similarity
-              // filtered list that the backend computes after generation completes.
-              // Without this the UI shows ALL recalled segments instead of only
-              // the most relevant ones (critical when retrieval_level="segment").
+              // Replace initial sources with answer-similarity-filtered final list
               if (payload.filtered_sources && Array.isArray(payload.filtered_sources)) {
                 setMessages((prev) => {
                   const copy = [...prev];
