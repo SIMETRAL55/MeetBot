@@ -109,6 +109,10 @@ class Job(Base):
     diarization_json_path = Column(String(500), nullable=True)
     db_dir = Column(String(500), nullable=True)
 
+    # PageIndex (vectorless LLM-based retrieval — optional)
+    pageindex_path = Column(String(500), nullable=True)    # Path to PageIndex JSON tree
+    pageindex_status = Column(String(20), nullable=True)   # pending|building|ready|failed
+
     # Transcript versioning — bumped on each edit-save-reindex cycle so
     # vectors can track which version of the transcript they represent.
     transcript_version = Column(Integer, default=1, nullable=False)
