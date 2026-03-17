@@ -76,6 +76,7 @@ def _register_pages() -> None:
         api_auth_login,
         api_auth_register,
         api_get_chat_history,
+        api_build_pageindex,
     )
     app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
@@ -92,6 +93,7 @@ def _register_pages() -> None:
     app.add_api_route("/api/jobs/{job_id}/cancel",   api_job_cancel,   methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/restart",  api_job_restart,  methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/chat/history", api_get_chat_history, methods=["GET"])
+    app.add_api_route("/api/jobs/{job_id}/build-pageindex", api_build_pageindex, methods=["POST"])
 
     # Register WebSocket endpoint for streaming chat (RAG Q&A).
     from .ws_chat import ws_chat

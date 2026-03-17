@@ -286,6 +286,10 @@ async def ws_chat(websocket: WebSocket, job_id: str) -> None:
     if retrieval_level not in ("document", "segment", "chunk"):
         retrieval_level = "chunk"
 
+    retrieval_method: str = payload.get("retrieval_method", "vector")
+    if retrieval_method not in ("vector", "pageindex"):
+        retrieval_method = "vector"
+
     segment_count = payload.get("segment_count")
     if segment_count is not None:
         try:
@@ -294,8 +298,8 @@ async def ws_chat(websocket: WebSocket, job_id: str) -> None:
             segment_count = None
 
     logger.info(
-        "ws_chat: job=%s question=%r llm_mode=%s retrieval_level=%s",
-        job_id[:8], question[:80], llm_mode, retrieval_level,
+        "ws_chat: job=%s question=%r llm_mode=%s retrieval_level=%s retrieval_method=%s",
+        job_id[:8], question[:80], llm_mode, retrieval_level, retrieval_method,
     )
 
     # ── 3. Persist user message ──────────────────────────────────────────
@@ -323,6 +327,8 @@ async def ws_chat(websocket: WebSocket, job_id: str) -> None:
         retrieval_level=retrieval_level,
         segment_count=segment_count,
         abort_event=abort_event,
+        retrieval_method=retrieval_method,
+        job_id=job_id,
     )
 
     # _relay_stream is now disconnect-safe: it captures last_event BEFORE

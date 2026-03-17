@@ -420,6 +420,7 @@ async def api_job_status(job_id: str) -> JSONResponse:
         "original_filename": job.original_filename,
         "file_size": job.file_size,
         "created_at": _utc_iso(job.created_at),
+        "pageindex_status": job.pageindex_status,
     })
 
 
@@ -744,6 +745,122 @@ async def api_job_reindex(job_id: str) -> JSONResponse:
 
     return JSONResponse(
         {"job_id": job_id, "status": "reindexing", "message": "Reindex started"},
+        status_code=202,
+    )
+
+
+# ── Build PageIndex handler ──────────────────────────────────────────────────
+
+async def api_build_pageindex(job_id: str) -> JSONResponse:
+    """
+    Trigger a PageIndex tree build for a completed job.
+
+    POST /api/jobs/{job_id}/build-pageindex
+
+    Behaviour
+    ---------
+    1. Validates that PAGEINDEX_ENABLED is True and the job is COMPLETED.
+    2. Sets pageindex_status to "building".
+    3. Runs PageIndex indexing asynchronously in a background thread.
+    4. Returns 202 Accepted immediately.
+
+    Errors
+    ------
+    404  Job not found.
+    409  Job not completed, or PageIndex not enabled.
+    """
+    from ..config import settings as _settings
+
+    if not _settings.PAGEINDEX_ENABLED:
+        raise HTTPException(
+            status_code=409,
+            detail="PageIndex is not enabled. Set PAGEINDEX_ENABLED=true in your .env file.",
+        )
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.status != JobStatus.COMPLETED:
+            raise HTTPException(
+                status_code=409,
+                detail=f"Job must be COMPLETED to build PageIndex (current: {job.status.value})",
+            )
+
+        if job.pageindex_status == "building":
+            raise HTTPException(
+                status_code=409,
+                detail="PageIndex is already being built for this job",
+            )
+
+        # Mark as building
+        job.pageindex_status = "building"
+        db.commit()
+    finally:
+        db.close()
+
+    # Run in background thread via the job queue's thread pool
+    import threading
+
+    def _build():
+        import asyncio as _aio
+        _SessionLocal = get_session()
+        _db = _SessionLocal()
+        try:
+            _job = get_job(_db, job_id)
+            if _job is None:
+                return
+
+            # Read segments
+            from ..db.crud import get_segments_for_job
+            segments = get_segments_for_job(_db, job_id)
+            if not segments:
+                _job.pageindex_status = "failed"
+                _db.commit()
+                return
+
+            seg_dicts = [s.to_dict() for s in segments]
+
+            from ..services.rag.indexer_pageindex import PageIndexAdapter
+            adapter = PageIndexAdapter()
+
+            loop = _aio.new_event_loop()
+            try:
+                pi_path = loop.run_until_complete(
+                    adapter.build_index(
+                        segments=seg_dicts,
+                        job_id=job_id,
+                        filename=_job.original_filename,
+                    )
+                )
+            finally:
+                loop.close()
+
+            _job.pageindex_path = str(pi_path)
+            _job.pageindex_status = "ready"
+            _db.commit()
+            logger.info("build_pageindex: job %s complete: %s", job_id[:8], pi_path)
+
+        except Exception as exc:
+            logger.error("build_pageindex: job %s failed: %s", job_id[:8], exc)
+            try:
+                _job = get_job(_db, job_id)
+                if _job:
+                    _job.pageindex_status = "failed"
+                    _db.commit()
+            except Exception:
+                pass
+        finally:
+            _db.close()
+
+    t = threading.Thread(target=_build, name=f"pageindex-{job_id[:8]}", daemon=True)
+    t.start()
+
+    return JSONResponse(
+        {"job_id": job_id, "status": "building", "message": "PageIndex build started"},
         status_code=202,
     )
 
