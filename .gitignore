@@ -190,3 +190,9 @@ PROJECT_CONTEXT.md
 
 # Ruff cache
 .ruff_cache/
+
+#pageindex_repo
+vendor/
+
+CLAUDE.md
+tasks/
