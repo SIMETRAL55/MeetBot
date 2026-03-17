@@ -196,6 +196,17 @@ COPY setup.py .
 COPY meetbot/ meetbot/
 RUN pip install -e .
 
+# ── PageIndex — clone at build time and wire to venv via .pth ───────────────
+# PageIndex is not pip-installable (no setup.py / pyproject.toml).
+# It is cloned directly into /opt/pageindex_repo inside the container.
+# /opt/ is the standard Linux location for optional third-party software;
+# it keeps vendor code separate from the application tree at /app/.
+# A .pth file in site-packages registers the path so `import pageindex` works.
+# Its pip dependencies (openai, tiktoken, pyyaml) are already installed above.
+RUN git clone --depth 1 https://github.com/VectifyAI/PageIndex.git /opt/pageindex_repo \
+    && echo "/opt/pageindex_repo" \
+       > /opt/venv/lib/python3.12/site-packages/pageindex.pth
+
 # =============================================================================
 # Runtime base images — slim counterparts of the builder bases.
 # They carry CUDA *runtime* libraries needed by torch/autoawq at run time
@@ -277,6 +288,10 @@ WORKDIR /app
 # (/opt/venv) for every variant, so this instruction never changes.
 COPY --from=builder /opt/venv /opt/venv
 
+# PageIndex source lives outside the venv; copy it to the same absolute path
+# the builder used so the .pth reference (/opt/pageindex_repo) keeps working.
+COPY --from=builder /opt/pageindex_repo /opt/pageindex_repo
+
 # Copy application source
 COPY --chown=meetbot:meetbot meetbot/ ./meetbot/
 COPY --chown=meetbot:meetbot setup.py ./
@@ -287,7 +302,7 @@ COPY --chown=meetbot:meetbot setup.py ./
 #   /app/db              Chroma vector store + SQLite DB
 #   /app/results         JSON pipeline outputs
 #   /app/temp            transient pipeline working files
-RUN mkdir -p data/uploads models db results prepared temp .cache_hf \
+RUN mkdir -p data/uploads models db db/pageindex results prepared temp .cache_hf \
     && chown -R meetbot:meetbot /app
 
 # Default configuration — override with -e or --env-file
@@ -302,7 +317,10 @@ ENV OUTPUT_DIR=/app/results \
     USE_LOCAL_LLM=false \
     HF_PROVIDER=auto \
     WEB_HOST=0.0.0.0 \
-    WEB_PORT=8080
+    WEB_PORT=8080 \
+    PAGEINDEX_ENABLED=false \
+    PAGEINDEX_AUTO_INDEX=false \
+    PAGEINDEX_OUTPUT_DIR=/app/db/pageindex
 
 EXPOSE 8080
 

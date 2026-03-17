@@ -82,6 +82,17 @@ x-meetbot-env: &meetbot-env
   # HuggingFace model download cache → named volume (no host directory needed)
   CACHE_DIR: /app/.cache_hf
 
+  # ── PageIndex (optional LLM-based tree-search retrieval) ────────────────
+  # Set PAGEINDEX_ENABLED=true and supply an API key to activate.
+  # PAGEINDEX_OUTPUT_DIR maps inside /app/db so trees persist via the bind mount.
+  PAGEINDEX_ENABLED: ${PAGEINDEX_ENABLED:-false}
+  PAGEINDEX_AUTO_INDEX: ${PAGEINDEX_AUTO_INDEX:-false}
+  PAGEINDEX_LLM_BACKEND: ${PAGEINDEX_LLM_BACKEND:-openrouter}
+  PAGEINDEX_LLM_BASE_URL: ${PAGEINDEX_LLM_BASE_URL:-https://openrouter.ai/api/v1}
+  PAGEINDEX_LLM_MODEL: ${PAGEINDEX_LLM_MODEL:-qwen/qwen3-next-80b-a3b-instruct:free}
+  PAGEINDEX_LLM_API_KEY: ${PAGEINDEX_LLM_API_KEY:-}
+  PAGEINDEX_OUTPUT_DIR: /app/db/pageindex
+
 services:
   # ---------------------------------------------------------------------------
   # Backend — Python / NiceGUI + FastAPI
