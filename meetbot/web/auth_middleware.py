@@ -109,6 +109,7 @@ def verify_token(token: str) -> Optional[dict]:
 
         # Check expiration
         if payload.get("exp", 0) < time.time():
+            logger.debug("JWT rejected: token expired for sub=%s", payload.get("sub"))
             return None
 
         return payload

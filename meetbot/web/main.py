@@ -77,6 +77,8 @@ def _register_pages() -> None:
         api_auth_register,
         api_get_chat_history,
         api_build_pageindex,
+        api_cancel_pageindex,
+        api_get_pageindex_tree,
     )
     app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
@@ -94,6 +96,8 @@ def _register_pages() -> None:
     app.add_api_route("/api/jobs/{job_id}/restart",  api_job_restart,  methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/chat/history", api_get_chat_history, methods=["GET"])
     app.add_api_route("/api/jobs/{job_id}/build-pageindex", api_build_pageindex, methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}/cancel-pageindex", api_cancel_pageindex, methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}/pageindex-tree", api_get_pageindex_tree, methods=["GET"])
 
     # Register WebSocket endpoint for streaming chat (RAG Q&A).
     from .ws_chat import ws_chat
@@ -158,6 +162,13 @@ def create_app() -> None:
     # Setup
     _setup_database()
     _setup_upload_dirs()
+
+    # Rate limiting (slowapi)
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from .api import limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
     # CORS Middleware
     from fastapi.middleware.cors import CORSMiddleware

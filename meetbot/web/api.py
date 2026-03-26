@@ -3,6 +3,10 @@ REST API endpoints for MeetBot.
 
 Registered on the NiceGUI FastAPI app via app.add_api_route().
 
+# NOTE: Every function defined here MUST also be registered in main.py via
+# app.add_api_route(). Forgetting main.py means the endpoint silently doesn't
+# exist — no error is raised, the route simply isn't reachable.
+
 Routes
 ------
 GET  /api/jobs
@@ -33,6 +37,12 @@ from typing import Literal, Optional
 from fastapi import HTTPException, Query as QueryParam, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
 from pydantic import BaseModel, Field
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from ..config import settings as _settings
+
+# Module-level rate limiter — registered on app.state in main.py
+limiter = Limiter(key_func=get_remote_address)
 
 from ..db.database import get_session
 from ..db.crud import get_job, build_aligned_json_from_db
@@ -231,6 +241,7 @@ async def api_list_jobs(request: "Request") -> JSONResponse:
     finally:
         db.close()
 
+@limiter.limit(lambda: _settings.RATE_LIMIT_UPLOAD)
 async def api_upload_job(
     request: "Request",
     file: UploadFile = File(...),
@@ -263,6 +274,15 @@ async def api_upload_job(
             detail=f"Unsupported file type: {file_ext}. Allowed: {', '.join(settings.get_allowed_extensions())}"
         )
 
+    # Reject oversized uploads before writing to disk (check Content-Length header)
+    max_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+    content_length = request.headers.get("content-length")
+    if content_length and int(content_length) > max_bytes:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB} MB.",
+        )
+
     token_user = get_optional_user(request)
 
     SessionLocal = get_session()
@@ -289,8 +309,25 @@ async def api_upload_job(
         with open(upload_path, "wb") as buffer:
              import shutil
              shutil.copyfileobj(file.file, buffer)
-        
+
         saved_size = upload_path.stat().st_size
+        if saved_size > max_bytes:
+            upload_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum allowed size is {settings.MAX_UPLOAD_SIZE_MB} MB.",
+            )
+
+        # Validate actual MIME type using libmagic (guards against disguised executables)
+        import magic
+        mime = magic.from_file(str(upload_path), mime=True)
+        _ALLOWED_MIME_PREFIXES = ("audio/", "video/")
+        if not any(mime.startswith(p) for p in _ALLOWED_MIME_PREFIXES):
+            upload_path.unlink(missing_ok=True)
+            raise HTTPException(
+                status_code=415,
+                detail=f"Unsupported file type: {mime}. Only audio and video files are accepted.",
+            )
 
         job = create_job(
             db,
@@ -751,6 +788,31 @@ async def api_job_reindex(job_id: str) -> JSONResponse:
 
 # ── Build PageIndex handler ──────────────────────────────────────────────────
 
+# In-memory cancel flags for PageIndex builds (separate from pipeline cancel).
+import threading as _pi_threading
+_pageindex_cancel_flags: dict[str, bool] = {}
+_pageindex_cancel_lock = _pi_threading.Lock()
+
+
+def _pi_request_cancel(job_id: str) -> None:
+    with _pageindex_cancel_lock:
+        _pageindex_cancel_flags[job_id] = True
+
+
+def _pi_is_cancelled(job_id: str) -> bool:
+    with _pageindex_cancel_lock:
+        return _pageindex_cancel_flags.get(job_id, False)
+
+
+def _pi_clear(job_id: str) -> None:
+    with _pageindex_cancel_lock:
+        _pageindex_cancel_flags.pop(job_id, None)
+
+
+class PageIndexCancelledError(Exception):
+    """Raised when a PageIndex build is cancelled."""
+
+
 async def api_build_pageindex(job_id: str) -> JSONResponse:
     """
     Trigger a PageIndex tree build for a completed job.
@@ -796,7 +858,8 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
                 detail="PageIndex is already being built for this job",
             )
 
-        # Mark as building
+        # Mark as building and clear any previous cancel flag
+        _pi_clear(job_id)
         job.pageindex_status = "building"
         db.commit()
     finally:
@@ -827,6 +890,11 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
             from ..services.rag.indexer_pageindex import PageIndexAdapter
             adapter = PageIndexAdapter()
 
+            # Pass a cancel checker so build_index can abort between LLM calls
+            def cancel_checker() -> None:
+                if _pi_is_cancelled(job_id):
+                    raise PageIndexCancelledError("PageIndex build cancelled by user")
+
             loop = _aio.new_event_loop()
             try:
                 pi_path = loop.run_until_complete(
@@ -834,6 +902,7 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
                         segments=seg_dicts,
                         job_id=job_id,
                         filename=_job.original_filename,
+                        cancel_checker=cancel_checker,
                     )
                 )
             finally:
@@ -843,6 +912,16 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
             _job.pageindex_status = "ready"
             _db.commit()
             logger.info("build_pageindex: job %s complete: %s", job_id[:8], pi_path)
+
+        except PageIndexCancelledError:
+            logger.info("build_pageindex: job %s cancelled by user", job_id[:8])
+            try:
+                _job = get_job(_db, job_id)
+                if _job:
+                    _job.pageindex_status = "cancelled"
+                    _db.commit()
+            except Exception:
+                pass
 
         except Exception as exc:
             logger.error("build_pageindex: job %s failed: %s", job_id[:8], exc)
@@ -854,6 +933,7 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
             except Exception:
                 pass
         finally:
+            _pi_clear(job_id)
             _db.close()
 
     t = threading.Thread(target=_build, name=f"pageindex-{job_id[:8]}", daemon=True)
@@ -863,6 +943,74 @@ async def api_build_pageindex(job_id: str) -> JSONResponse:
         {"job_id": job_id, "status": "building", "message": "PageIndex build started"},
         status_code=202,
     )
+
+
+async def api_cancel_pageindex(job_id: str) -> JSONResponse:
+    """
+    Cancel an in-progress PageIndex build.
+
+    POST /api/jobs/{job_id}/cancel-pageindex
+
+    Sets a cancel flag that the build thread checks between LLM calls.
+    """
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if job.pageindex_status != "building":
+            raise HTTPException(
+                status_code=409,
+                detail=f"PageIndex is not currently building (status: {job.pageindex_status})",
+            )
+
+        _pi_request_cancel(job_id)
+
+        # Update status immediately so UI reflects it
+        job.pageindex_status = "cancelled"
+        db.commit()
+
+        return JSONResponse(
+            {"job_id": job_id, "status": "cancelled", "message": "PageIndex build cancel requested"},
+        )
+    finally:
+        db.close()
+
+
+async def api_get_pageindex_tree(job_id: str) -> JSONResponse:
+    """
+    Return the PageIndex JSON tree for a completed job.
+
+    GET /api/jobs/{job_id}/pageindex-tree
+
+    Returns the raw tree JSON written by PageIndexAdapter.build_index().
+    404 if the job has no pageindex_path or the file does not exist.
+    """
+    import json as _j
+    from pathlib import Path as _Path
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = get_job(db, job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+
+        if not job.pageindex_path:
+            raise HTTPException(status_code=404, detail="PageIndex not built for this job")
+
+        tree_path = _Path(job.pageindex_path)
+        if not tree_path.exists():
+            raise HTTPException(status_code=404, detail="PageIndex tree file not found on disk")
+
+        with tree_path.open("r", encoding="utf-8") as fh:
+            tree = _j.load(fh)
+
+        return JSONResponse(tree)
+    finally:
+        db.close()
 
 
 # ── Cancel handler ────────────────────────────────────────────────────────────
