@@ -784,6 +784,19 @@ class RAGIndexer:
 # Module-level helpers
 # ---------------------------------------------------------------------------
 
+def _hash_segments(segments: List[Dict[str, Any]]) -> str:
+    """Return a SHA256 hex-digest of the segment texts + speakers.
+
+    Used by the reindex worker to skip ChromaDB rebuilds when the transcript
+    has not changed since the last successful index.
+    """
+    hasher = hashlib.sha256()
+    for seg in segments:
+        hasher.update((seg.get("text") or "").encode("utf-8"))
+        hasher.update((seg.get("speaker") or "").encode("utf-8"))
+    return hasher.hexdigest()
+
+
 def _read_jsonl(path: Path) -> List[Dict[str, Any]]:
     """Read a JSONL file into a list of dicts.
 

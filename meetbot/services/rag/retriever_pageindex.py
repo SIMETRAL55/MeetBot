@@ -1,10 +1,10 @@
 """
 PageIndex tree-search retriever for MeetBot.
 
-Implements LLM-driven retrieval over a PageIndex tree structure.  The LLM
-receives the tree hierarchy and a query, then returns a list of node IDs that
-are most likely to contain the answer.  The retriever maps those node IDs back
-to transcript segment ranges and collects the text.
+Implements an agentic LLM-driven retrieval loop over a 3-level PageIndex
+tree.  The LLM receives a compact tree summary (titles + summaries + node_ids)
+and selects 1-3 nodes per iteration.  A sufficiency check determines whether
+enough context has been gathered or more iterations are needed (up to 4).
 
 Uses the same OpenAI-compatible endpoint as indexing (env var injection via
 ``pageindex_env``), so it works with OpenRouter, local Ollama, or OpenAI.
@@ -18,25 +18,41 @@ import re
 from typing import Any, Dict, List, Optional
 
 from ...config import settings
+from .prompts import SUFFICIENCY_CHECK_PROMPT, TREE_SEARCH_PROMPT
+from .retrieval_strategy import RetrievalResult
 
 logger = logging.getLogger(__name__)
 
-# Prompt template for LLM tree search (from PageIndex docs, Section 4.4).
-SEARCH_PROMPT = """You are given a query and the tree structure of a meeting transcript.
-Find all nodes that are likely to contain the answer to the query.
+MAX_ITERATIONS = 4
 
-Query: {query}
 
-PageIndex Tree:
-{tree_summary}
+def _parse_json(text: str) -> Any:
+    """Extract JSON from an LLM response, with fallback parsing."""
+    try:
+        return json.loads(text)
+    except (json.JSONDecodeError, TypeError):
+        pass
 
-Respond with ONLY valid JSON in this exact format (no other text):
-{{"thinking": "your brief reasoning", "node_list": ["0001", "0003"]}}
-"""
+    stripped = re.sub(r"^```(?:json)?\s*", "", text.strip(), flags=re.MULTILINE)
+    stripped = re.sub(r"\s*```\s*$", "", stripped, flags=re.MULTILINE)
+    try:
+        return json.loads(stripped)
+    except (json.JSONDecodeError, TypeError):
+        pass
+
+    for pattern in (r"\{.*\}", r"\[.*\]"):
+        match = re.search(pattern, text, re.DOTALL)
+        if match:
+            try:
+                return json.loads(match.group(0))
+            except (json.JSONDecodeError, TypeError):
+                pass
+
+    raise ValueError(f"Could not parse JSON from LLM response: {text[:200]}")
 
 
 class PageIndexRetriever:
-    """LLM-based tree search over a PageIndex structure."""
+    """Agentic LLM-based tree search over a PageIndex structure."""
 
     def __init__(
         self,
@@ -48,187 +64,201 @@ class PageIndexRetriever:
         self.base_url = base_url or settings.get_pageindex_base_url()
         self.api_key = api_key or settings.PAGEINDEX_LLM_API_KEY or "not-needed"
 
+    # -- LLM call ----------------------------------------------------------
+
+    def _llm_call(self, prompt: str) -> str:
+        """Single synchronous LLM call via ``pageindex_env()``."""
+        from ...adapters.llm.openai_adapter import pageindex_env
+
+        with pageindex_env(settings):
+            import openai
+            client = openai.OpenAI(
+                base_url=self.base_url,
+                api_key=self.api_key,
+            )
+            response = client.chat.completions.create(
+                model=self.model,
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.0,
+                max_tokens=4096,
+            )
+            return response.choices[0].message.content or ""
+
+    # -- Tree summary ------------------------------------------------------
+
+    @staticmethod
+    def _build_tree_summary(tree: Dict[str, Any]) -> str:
+        """Serialize tree to text with titles + summaries + node_ids only."""
+        lines: list[str] = []
+
+        def _walk(node: Dict, indent: int = 0) -> None:
+            nid = node.get("node_id", "")
+            title = node.get("title", "")
+            summary_obj = node.get("summary", "")
+            if isinstance(summary_obj, dict):
+                summary_text = summary_obj.get("summary", "")
+            else:
+                summary_text = str(summary_obj) if summary_obj else ""
+
+            prefix = "  " * indent
+            line = f"{prefix}[{nid}] {title}"
+            if summary_text:
+                line += f" -- {summary_text}"
+            lines.append(line)
+
+            for child in node.get("children", []):
+                _walk(child, indent + 1)
+
+        _walk(tree)
+        return "\n".join(lines)
+
+    # -- Chat history formatting -------------------------------------------
+
+    @staticmethod
+    def _format_chat_history(chat_history: Optional[List[Dict]]) -> str:
+        """Format chat history for LLM prompts."""
+        if not chat_history:
+            return ""
+        lines = []
+        for msg in chat_history[-6:]:  # Last 6 messages max
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            lines.append(f"{role}: {content}")
+        return "\n".join(lines)
+
+    # -- Agentic search loop -----------------------------------------------
+
     async def search(
         self,
         query: str,
         tree: Dict[str, Any],
-        segments: List[Dict],
-    ) -> List[Dict[str, Any]]:
-        """
-        Search the PageIndex tree for nodes relevant to the query.
-
-        Steps:
-            1. Build a compact tree summary for the LLM prompt
-            2. Send tree + query to LLM via OpenAI-compatible API
-            3. Parse returned node_list
-            4. Map node IDs -> segment ranges
-            5. Collect segment text from matched nodes
-            6. Return results with node references
+        content_map: Dict[str, str],
+        chat_history: Optional[List[Dict]] = None,
+        cancel_checker: Optional[callable] = None,
+    ) -> List[RetrievalResult]:
+        """Agentic search: up to MAX_ITERATIONS of select-then-check.
 
         Args:
-            query: User's question.
-            tree: The PageIndex tree (loaded from JSON).
-            segments: Original transcript segments for text lookup.
+            cancel_checker: Optional callable checked between iterations.
+                Should raise an exception to abort the search.
 
-        Returns:
-            List of source dicts compatible with MeetBot's ChatSource format,
-            enriched with node_title and node_id fields.
+        Returns a list of RetrievalResult objects for the selected nodes.
         """
-        # Step 1: Build tree summary
         tree_summary = self._build_tree_summary(tree)
+        chat_hist_text = self._format_chat_history(chat_history)
+        chat_history_block = (
+            f"Chat history:\n{chat_hist_text}" if chat_hist_text else ""
+        )
 
-        # Step 2: Call LLM
-        node_ids = await self._llm_tree_search(query, tree_summary)
+        all_selected: list[str] = []
+        all_content: list[str] = []
 
-        if not node_ids:
-            logger.warning("PageIndex retriever: LLM returned no nodes for query: %s", query[:80])
+        for iteration in range(MAX_ITERATIONS):
+            if cancel_checker:
+                cancel_checker()
+            # a. Tree search
+            search_prompt = TREE_SEARCH_PROMPT.format(
+                query=query,
+                chat_history_block=chat_history_block,
+                tree_summary=tree_summary,
+            )
+            try:
+                raw = self._llm_call(search_prompt)
+                parsed = _parse_json(raw)
+                node_ids = parsed.get("node_ids", []) if isinstance(parsed, dict) else []
+                node_ids = [str(n) for n in node_ids if str(n) not in all_selected]
+            except Exception as exc:
+                logger.warning("Tree search LLM failed (iter %d): %s", iteration, exc)
+                break
+
+            if not node_ids:
+                logger.debug("No new nodes selected at iteration %d", iteration)
+                break
+
+            # b. Fetch content for newly selected nodes
+            new_content_parts: list[str] = []
+            for nid in node_ids:
+                text = content_map.get(nid, "")
+                if text:
+                    new_content_parts.append(f"--- [{nid}] ---\n{text}")
+
+            all_selected.extend(node_ids)
+            all_content.extend(new_content_parts)
+
+            # c. Sufficiency check
+            sufficiency_prompt = SUFFICIENCY_CHECK_PROMPT.format(
+                query=query,
+                chat_history_block=chat_history_block,
+                previously_selected_nodes=", ".join(all_selected),
+                retrieved_content="\n\n".join(all_content),
+            )
+            try:
+                raw = self._llm_call(sufficiency_prompt)
+                check = _parse_json(raw)
+                if isinstance(check, dict) and check.get("sufficient", False):
+                    logger.info(
+                        "PageIndex retriever: sufficient after %d iterations, %d nodes",
+                        iteration + 1, len(all_selected),
+                    )
+                    break
+                # If insufficient, the LLM may suggest additional node_ids
+                extra = check.get("node_ids", []) if isinstance(check, dict) else []
+                if extra:
+                    for nid in extra:
+                        nid = str(nid)
+                        if nid not in all_selected and nid in content_map:
+                            all_selected.append(nid)
+                            text = content_map.get(nid, "")
+                            if text:
+                                all_content.append(f"--- [{nid}] ---\n{text}")
+            except Exception as exc:
+                logger.warning("Sufficiency check failed (iter %d): %s", iteration, exc)
+                break
+
+        if not all_selected:
+            logger.warning("PageIndex retriever: no nodes selected for query: %s", query[:80])
             return []
 
-        # Step 3-4: Map node IDs to segment indices
-        node_map = self._build_node_map(tree)
-        matched_segments = []
-
-        for nid in node_ids:
-            node = node_map.get(nid)
-            if node is None:
-                logger.debug("PageIndex retriever: node %s not found in tree", nid)
-                continue
-
-            seg_indices = node.get("segment_indices", [])
-            node_title = node.get("title", f"Node {nid}")
-
-            for si in seg_indices:
-                if 0 <= si < len(segments):
-                    seg = segments[si]
-                    matched_segments.append({
-                        "segment_index": si,
-                        "start": seg.get("start", 0),
-                        "end": seg.get("end", 0),
-                        "speaker": seg.get("speaker", "Unknown"),
-                        "text": seg.get("text", ""),
-                        "node_title": node_title,
-                        "node_id": nid,
-                        "distance": 0.0,
-                        "relevance": 100,
-                    })
-
-        # Deduplicate by segment_index (a segment may appear in multiple nodes)
-        seen = set()
-        unique = []
-        for s in matched_segments:
-            if s["segment_index"] not in seen:
-                seen.add(s["segment_index"])
-                unique.append(s)
+        # Build RetrievalResult list
+        node_map = self._build_flat_node_map(tree)
+        results: list[RetrievalResult] = []
+        for nid in all_selected:
+            text = content_map.get(nid, "")
+            node_info = node_map.get(nid, {})
+            results.append(RetrievalResult(
+                text=text,
+                metadata={
+                    "node_id": nid,
+                    "node_title": node_info.get("title", nid),
+                    "level": node_info.get("level"),
+                    "speakers": node_info.get("speakers", []),
+                    "start_segment": node_info.get("start_segment"),
+                    "end_segment": node_info.get("end_segment"),
+                },
+                score=1.0,
+                retrieval_method="pageindex",
+                source_ref=nid,
+            ))
 
         logger.info(
-            "PageIndex retriever: query=%s -> %d nodes -> %d segments",
-            query[:40], len(node_ids), len(unique),
+            "PageIndex retriever: query=%s -> %d nodes selected",
+            query[:40], len(results),
         )
-        return unique
+        return results
 
-    async def _llm_tree_search(self, query: str, tree_summary: str) -> List[str]:
-        """Send tree + query to LLM and parse the node_list response."""
-        import openai
+    # -- Node map ----------------------------------------------------------
 
-        prompt = SEARCH_PROMPT.format(query=query, tree_summary=tree_summary)
-
-        try:
-            from ...adapters.llm.openai_adapter import pageindex_env
-
-            with pageindex_env(settings):
-                client = openai.OpenAI(
-                    base_url=self.base_url,
-                    api_key=self.api_key,
-                )
-                response = client.chat.completions.create(
-                    model=self.model,
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.0,
-                    max_tokens=1024,
-                )
-
-            content = response.choices[0].message.content or ""
-            return self._parse_node_list(content)
-
-        except Exception as exc:
-            logger.error("PageIndex LLM tree search failed: %s", exc)
-            return []
-
-    def _parse_node_list(self, response_text: str) -> List[str]:
-        """Extract node_list from LLM JSON response with fallback parsing."""
-        # Try direct JSON parse
-        try:
-            data = json.loads(response_text)
-            if isinstance(data, dict) and "node_list" in data:
-                return [str(n) for n in data["node_list"]]
-        except json.JSONDecodeError:
-            pass
-
-        # Fallback: extract JSON from markdown code block
-        json_match = re.search(r'```(?:json)?\s*(\{.*?\})\s*```', response_text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(1))
-                if isinstance(data, dict) and "node_list" in data:
-                    return [str(n) for n in data["node_list"]]
-            except json.JSONDecodeError:
-                pass
-
-        # Fallback: find any JSON object in the response
-        json_match = re.search(r'\{[^{}]*"node_list"\s*:\s*\[.*?\][^{}]*\}', response_text, re.DOTALL)
-        if json_match:
-            try:
-                data = json.loads(json_match.group(0))
-                return [str(n) for n in data.get("node_list", [])]
-            except json.JSONDecodeError:
-                pass
-
-        logger.warning("PageIndex retriever: could not parse node_list from LLM response")
-        return []
-
-    def _build_tree_summary(self, tree: Dict[str, Any], indent: int = 0) -> str:
-        """Build a compact text representation of the tree for the LLM prompt."""
-        lines = []
-
-        # Root container: real PageIndex uses "structure"; fallback uses "children".
-        # Neither key has a node_id, so we unwrap and recurse into children directly.
-        if "structure" in tree or ("children" in tree and "node_id" not in tree):
-            top_nodes = tree.get("structure", tree.get("children", []))
-            for child in top_nodes:
-                lines.append(self._build_tree_summary(child, indent))
-            return "\n".join(lines)
-
-        # Regular node
-        prefix = "  " * indent
-        node_id = tree.get("node_id", "?")
-        title = tree.get("title", "")
-        seg_indices = tree.get("segment_indices", [])
-
-        if title:
-            seg_info = f" (segments: {seg_indices[0]}-{seg_indices[-1]})" if seg_indices else ""
-            lines.append(f"{prefix}[{node_id}] {title}{seg_info}")
-
-        # Subnodes: real PageIndex uses "nodes"; fallback uses "children"
-        for child in tree.get("nodes", tree.get("children", [])):
-            lines.append(self._build_tree_summary(child, indent + 1))
-
-        return "\n".join(lines)
-
-    def _build_node_map(self, tree: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
-        """Build a flat map from node_id -> node dict for fast lookup."""
-        node_map: Dict[str, Dict[str, Any]] = {}
+    @staticmethod
+    def _build_flat_node_map(tree: Dict[str, Any]) -> Dict[str, Dict]:
+        """Flat map from node_id to node dict."""
+        nmap: dict[str, dict] = {}
 
         def _walk(node: Dict) -> None:
             nid = node.get("node_id")
             if nid:
-                node_map[nid] = node
-            # Real PageIndex uses "nodes"; fallback uses "children"
-            for child in node.get("nodes", node.get("children", [])):
+                nmap[nid] = node
+            for child in node.get("children", []):
                 _walk(child)
 
-        # Walk from top-level nodes — real PageIndex uses "structure"; fallback uses "children"
-        top_nodes = tree.get("structure", tree.get("children", []))
-        for node in top_nodes:
-            _walk(node)
-
-        return node_map
+        _walk(tree)
+        return nmap
