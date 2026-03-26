@@ -28,6 +28,9 @@ nicegui==3.8.0                # Python-based web UI framework (includes FastAPI 
 sqlalchemy==2.0.46            # ORM for SQLite / PostgreSQL
 alembic>=1.13.0               # Database schema migrations
 bcrypt==5.0.0                 # Password hashing
+slowapi==0.1.9                # Rate limiting middleware for FastAPI/Starlette
+limits==5.8.0                 # Rate limit state stores (used by slowapi)
+python-magic==0.4.27          # MIME-type detection via libmagic
 
 # PostgreSQL support (optional — only needed if DATABASE_URL points to PostgreSQL)
 # pip install psycopg2-binary
