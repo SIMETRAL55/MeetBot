@@ -113,6 +113,10 @@ class Job(Base):
     pageindex_path = Column(String(500), nullable=True)    # Path to PageIndex JSON tree
     pageindex_status = Column(String(20), nullable=True)   # pending|building|ready|failed
 
+    # SHA256 of segment texts+speakers at last successful vector index build.
+    # Allows reindex_worker to skip ChromaDB rebuilds when nothing changed.
+    segments_hash = Column(String(64), nullable=True, default="")
+
     # Transcript versioning — bumped on each edit-save-reindex cycle so
     # vectors can track which version of the transcript they represent.
     transcript_version = Column(Integer, default=1, nullable=False)
@@ -256,6 +260,7 @@ class ChatMessage(Base):
     content_partial = Column(Text, nullable=True, default="")
     sources = Column(Text, nullable=True)              # JSON-encoded source list
     llm_backend = Column(String(20), nullable=True)    # "local" | "hf"
+    retrieval_method = Column(String(20), nullable=True)  # "vector" | "pageindex" | null for legacy
     # streaming|completed|stopped|interrupted  (default covers legacy rows)
     status = Column(String(20), nullable=False, default="completed")
     created_at = Column(
@@ -288,6 +293,7 @@ class ChatMessage(Base):
             "content": self.content,
             "sources": sources_list,
             "llm_backend": self.llm_backend,
+            "retrieval_method": self.retrieval_method,
             "status": self.status or "completed",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

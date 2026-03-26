@@ -533,6 +533,7 @@ def create_chat_message(
     sources: Optional[list] = None,
     llm_backend: Optional[str] = None,
     status: str = "completed",
+    retrieval_method: Optional[str] = None,
 ) -> ChatMessage:
     """
     Append a new message to a ChatSession.
@@ -548,6 +549,7 @@ def create_chat_message(
                 "interrupted".  Use "streaming" when creating the placeholder
                 row at the start of generation; update to a terminal status
                 with ``update_chat_message`` when generation ends.
+        retrieval_method: "vector" | "pageindex" (for assistant messages).
 
     Returns:
         Created ChatMessage.
@@ -560,6 +562,7 @@ def create_chat_message(
         sources=sources_json,
         llm_backend=llm_backend,
         status=status,
+        retrieval_method=retrieval_method,
     )
     db.add(msg)
     db.commit()
@@ -574,6 +577,7 @@ def update_chat_message(
     status: str,
     sources: Optional[list] = None,
     llm_backend: Optional[str] = None,
+    retrieval_method: Optional[str] = None,
 ) -> Optional[ChatMessage]:
     """
     Update the content and status of an existing ChatMessage in-place.
@@ -589,6 +593,7 @@ def update_chat_message(
         status: Terminal status — "completed" | "stopped" | "interrupted".
         sources: Updated source list (replaces previous value if provided).
         llm_backend: LLM backend label (replaces previous value if provided).
+        retrieval_method: "vector" | "pageindex" (replaces previous value if provided).
 
     Returns:
         Updated ChatMessage or None if not found.
@@ -603,6 +608,8 @@ def update_chat_message(
         msg.sources = _json.dumps(sources, ensure_ascii=False)
     if llm_backend is not None:
         msg.llm_backend = llm_backend
+    if retrieval_method is not None:
+        msg.retrieval_method = retrieval_method
     db.commit()
     db.refresh(msg)
     return msg
