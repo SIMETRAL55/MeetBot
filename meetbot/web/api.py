@@ -1210,3 +1210,348 @@ async def api_job_restart(job_id: str) -> JSONResponse:
         {"job_id": job_id, "status": "pending", "message": "Job restarted"},
         status_code=202,
     )
+
+
+# =============================================================================
+# Settings & Profile endpoints
+# =============================================================================
+
+def _coerce(current, raw: str):
+    """Coerce a DB string value to match the Python type of *current*."""
+    if isinstance(current, bool):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    if isinstance(current, int):
+        return int(raw)
+    if isinstance(current, float):
+        return float(raw)
+    return raw if raw.strip().lower() not in ("none", "null", "") else None
+
+
+# Keys that are never returned in API responses (not even masked).
+_NEVER_EXPOSE: set[str] = {"WEB_SECRET_KEY", "WEB_STORAGE_SECRET"}
+
+
+SETTINGS_META: dict[str, dict] = {
+    # ── Authentication ────────────────────────────────────────────────────
+    "HF_API_TOKEN": {
+        "description": "HuggingFace API token for gated models and HF Inference API.",
+        "type": "password", "sensitive": True, "group": "Authentication",
+        "restart_required": False,
+    },
+    # ── Models ────────────────────────────────────────────────────────────
+    "WHISPER_MODEL": {
+        "description": "HuggingFace Whisper model name used for ASR (HF backend).",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    "WHISPER_MODEL_SIZE": {
+        "description": "Model size for local/faster-whisper backends (tiny/small/medium/large-v3).",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    "DIARIZATION_MODEL": {
+        "description": "Pyannote model for speaker diarization.",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    "EMBEDDING_MODEL": {
+        "description": "Sentence-transformer model path or HF model ID.",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    "HF_MODEL": {
+        "description": "HuggingFace model ID for LLM inference via HF Inference API.",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    "HF_PROVIDER": {
+        "description": "HF inference provider (auto/sambanova/novita/cerebras).",
+        "type": "string", "sensitive": False, "group": "Models",
+        "restart_required": False,
+    },
+    # ── Backends ──────────────────────────────────────────────────────────
+    "TRANSCRIPTION_BACKEND": {
+        "description": "Transcription backend: 'huggingface' (API) or 'local' / 'faster-whisper' (GPU).",
+        "type": "string", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    "USE_LOCAL_LLM": {
+        "description": "Use a local AWQ model for LLM generation instead of HF Inference API.",
+        "type": "boolean", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    "LOCAL_LLM_MODEL_PATH": {
+        "description": "Path to local AWQ model directory.",
+        "type": "string", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    "LOCAL_LLM_CONTEXT_SIZE": {
+        "description": "Context window size in tokens for the local LLM.",
+        "type": "integer", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    "LOCAL_LLM_MAX_TOKENS": {
+        "description": "Maximum output tokens per generation.",
+        "type": "integer", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    "LOCAL_LLM_TEMPERATURE": {
+        "description": "Sampling temperature (0.0 = deterministic, 1.0+ = creative).",
+        "type": "string", "sensitive": False, "group": "Backends",
+        "restart_required": False,
+    },
+    # ── RAG & Retrieval ───────────────────────────────────────────────────
+    "RAG_TOP_K": {
+        "description": "Number of chunks to retrieve for each RAG query.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "SOURCE_SIM_THRESHOLD": {
+        "description": "Min cosine similarity (0\u20131) for a source to appear in results.",
+        "type": "string", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "SOURCE_MAX_RETURN": {
+        "description": "Max number of sources to show after similarity filtering.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "RAG_RECALL_N": {
+        "description": "ANN recall candidates fetched before reranking.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "RAG_MAX_CONTEXT_CHUNKS": {
+        "description": "Max chunks fed to LLM after reranking.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "CHUNK_TOKENS": {
+        "description": "Target chunk size in tokens for transcript chunking.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    "CHUNK_OVERLAP": {
+        "description": "Overlap tokens between consecutive chunks.",
+        "type": "integer", "sensitive": False, "group": "RAG & Retrieval",
+        "restart_required": False,
+    },
+    # ── Indexing Performance ──────────────────────────────────────────────
+    "EMBED_BATCH_SIZE": {
+        "description": "Embedding batch size. Lower = less RAM; higher = faster.",
+        "type": "integer", "sensitive": False, "group": "Indexing Performance",
+        "restart_required": False,
+    },
+    "PIPELINE_WORKERS": {
+        "description": "Max concurrent pipeline jobs. Keep at 1 on GPU-constrained machines.",
+        "type": "integer", "sensitive": False, "group": "Indexing Performance",
+        "restart_required": False,
+    },
+    "MEMORY_WATCH_ENABLED": {
+        "description": "Enable psutil memory monitoring during indexing.",
+        "type": "boolean", "sensitive": False, "group": "Indexing Performance",
+        "restart_required": False,
+    },
+    "MEMORY_WATCH_THRESHOLD_PCT": {
+        "description": "RAM fraction (0\u20131) that triggers batch-size halving.",
+        "type": "string", "sensitive": False, "group": "Indexing Performance",
+        "restart_required": False,
+    },
+    "RAG_MEMORY_SAFE_MODE": {
+        "description": "Enable memory-safe batched embedding and streamed inserts.",
+        "type": "boolean", "sensitive": False, "group": "Indexing Performance",
+        "restart_required": False,
+    },
+    # ── Web Server ────────────────────────────────────────────────────────
+    "WEB_HOST": {
+        "description": "Host to bind the web server to.",
+        "type": "string", "sensitive": False, "group": "Web Server",
+        "restart_required": True,
+    },
+    "WEB_PORT": {
+        "description": "Port the web server listens on.",
+        "type": "integer", "sensitive": False, "group": "Web Server",
+        "restart_required": True,
+    },
+    "WEB_SECRET_KEY": {
+        "description": "JWT signing key. Changing this invalidates all active sessions. Requires restart.",
+        "type": "password", "sensitive": True, "group": "Web Server",
+        "restart_required": True,
+    },
+    "WEB_STORAGE_SECRET": {
+        "description": "NiceGUI session encryption key. Requires restart to take effect.",
+        "type": "password", "sensitive": True, "group": "Web Server",
+        "restart_required": True,
+    },
+    "MAX_UPLOAD_SIZE_MB": {
+        "description": "Maximum audio upload size in megabytes.",
+        "type": "integer", "sensitive": False, "group": "Web Server",
+        "restart_required": False,
+    },
+    "ALLOWED_AUDIO_EXTENSIONS": {
+        "description": "Comma-separated allowed audio file extensions.",
+        "type": "string", "sensitive": False, "group": "Web Server",
+        "restart_required": False,
+    },
+    "RATE_LIMIT_UPLOAD": {
+        "description": "Upload rate limit per IP (slowapi format, e.g. '10/hour').",
+        "type": "string", "sensitive": False, "group": "Web Server",
+        "restart_required": False,
+    },
+    "RATE_LIMIT_CHAT": {
+        "description": "Chat WebSocket rate limit per IP (e.g. '60/minute').",
+        "type": "string", "sensitive": False, "group": "Web Server",
+        "restart_required": False,
+    },
+    # ── PageIndex ─────────────────────────────────────────────────────────
+    "PAGEINDEX_ENABLED": {
+        "description": "Master toggle for the PageIndex feature.",
+        "type": "boolean", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_AUTO_INDEX": {
+        "description": "Automatically build PageIndex during pipeline ingestion.",
+        "type": "boolean", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_LLM_BACKEND": {
+        "description": "LLM backend for PageIndex calls (openrouter/ollama/openai/custom).",
+        "type": "string", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_LLM_BASE_URL": {
+        "description": "OpenAI-compatible base URL for PageIndex LLM. Leave empty to auto-resolve.",
+        "type": "string", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_LLM_MODEL": {
+        "description": "Model ID for PageIndex tree search LLM calls.",
+        "type": "string", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_LLM_API_KEY": {
+        "description": "API key for the PageIndex LLM backend (OpenRouter/OpenAI).",
+        "type": "password", "sensitive": True, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_MAX_PAGE_TOKENS": {
+        "description": "Max tokens per tree node during PageIndex indexing.",
+        "type": "integer", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+    "PAGEINDEX_OUTPUT_DIR": {
+        "description": "Directory for storing PageIndex JSON tree files.",
+        "type": "string", "sensitive": False, "group": "PageIndex",
+        "restart_required": False,
+    },
+}
+
+_SENSITIVE_KEYS = {k for k, v in SETTINGS_META.items() if v["sensitive"]}
+
+
+async def api_get_settings(request: Request) -> JSONResponse:
+    """GET /api/settings — return all configurable settings (auth required)."""
+    from .auth_middleware import get_current_user
+    from ..db.crud import get_all_settings as _get_all_settings
+
+    await get_current_user(request)  # raises 401 if not authenticated
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        db_rows = {row.key: row.value for row in _get_all_settings(db)}
+    finally:
+        db.close()
+
+    result = []
+    for key, meta in SETTINGS_META.items():
+        if db_rows.get(key) is not None:
+            raw_value = db_rows[key]
+        else:
+            live = getattr(_settings, key, None)
+            raw_value = "" if live is None else str(live)
+
+        if key in _NEVER_EXPOSE:
+            display_value = ""
+        elif meta["sensitive"]:
+            display_value = "\u2022" * 8 if raw_value else ""
+        else:
+            display_value = raw_value
+
+        result.append({
+            "key": key,
+            "value": display_value,
+            "description": meta["description"],
+            "type": meta["type"],
+            "sensitive": meta["sensitive"],
+            "group": meta["group"],
+            "restart_required": meta["restart_required"],
+        })
+    return JSONResponse(result)
+
+
+class UpdateSettingRequest(BaseModel):
+    value: str
+
+
+async def api_update_setting(
+    request: Request, key: str, body: UpdateSettingRequest
+) -> JSONResponse:
+    """PUT /api/settings/{key} — update a setting value (admin only)."""
+    from .auth_middleware import get_current_user
+    from ..db.crud import get_user_by_id, upsert_setting
+
+    token_user = await get_current_user(request)  # raises 401 if not authenticated
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_id(db, token_user["sub"])
+        if not user or not user.is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required")
+
+        if key not in SETTINGS_META:
+            raise HTTPException(status_code=404, detail=f"Unknown setting: {key}")
+
+        upsert_setting(db, key, body.value)
+
+        # Hot-patch the live singleton (skip never-override keys)
+        if key not in _settings._NEVER_OVERRIDE:
+            try:
+                current = getattr(_settings, key, None)
+                coerced = _coerce(current, body.value)
+                object.__setattr__(_settings, key, coerced)
+            except Exception:
+                pass  # saved to DB; will apply on next restart
+    finally:
+        db.close()
+
+    return JSONResponse({
+        "ok": True,
+        "restart_required": SETTINGS_META[key]["restart_required"],
+    })
+
+
+async def api_get_me(request: Request) -> JSONResponse:
+    """GET /api/me — return the authenticated user's profile."""
+    from .auth_middleware import get_current_user
+    from ..db.crud import get_user_by_id
+
+    token_user = await get_current_user(request)
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_id(db, token_user["sub"])
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+        return JSONResponse({
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.username,
+            "is_admin": user.is_admin,
+            "created_at": _utc_iso(user.created_at),
+            "last_login": _utc_iso(user.last_login),
+        })
+    finally:
+        db.close()

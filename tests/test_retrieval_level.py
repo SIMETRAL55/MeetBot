@@ -1,34 +1,35 @@
 """
-Unit tests for explicit retrieval-level routing.
+Unit tests for automatic LLM-based retrieval-level selection.
 
-Verifies that ``QueryService.query_stream()`` uses the ``retrieval_level``
-parameter (not intent classification) to determine recall depth, and
-that the websocket endpoint correctly parses and forwards the parameter.
+Verifies that ``QueryService.query_stream()`` calls ``_select_retrieval_level()``
+to choose the recall depth automatically, and that the result is emitted as a
+``retrieval_level_note`` WS event.
 
 No real embedding model, LLM, or ChromaDB is loaded.
 """
 
 from unittest.mock import MagicMock, patch
-import types
 
 import pytest
 
 
 # ---------------------------------------------------------------------------
-# query_stream: retrieval_level routing
+# query_stream: auto retrieval-level routing
 # ---------------------------------------------------------------------------
 
 
 class TestQueryStreamRetrievalLevel:
-    """Verify query_stream routes based on explicit retrieval_level."""
+    """Verify query_stream auto-selects retrieval level via _select_retrieval_level."""
 
-    def _run_query_stream(self, retrieval_level=None, segment_count=None, k=4):
-        """Call query_stream with mocked retriever/LLM, return events + recall kwargs."""
+    def _run_query_stream(self, selected_level: str = "chunk", k: int = 4):
+        """
+        Call query_stream with mocked retriever/LLM and a fixed _select_retrieval_level
+        return value.  Returns (events, recall_kwargs).
+        """
         from meetbot.services.query_service import QueryService
 
         recall_kwargs_capture = {}
 
-        # Mock Retriever
         mock_candidate = MagicMock()
         mock_candidate.text = "Some transcript text"
         mock_candidate.metadata = {"speaker": "A", "start": 0.0, "end": 5.0, "audio_file": "test.mp3"}
@@ -48,13 +49,14 @@ class TestQueryStreamRetrievalLevel:
 
         mock_retriever_cls = MagicMock(return_value=mock_retriever_instance)
 
-        # Mock LLM adapter
         mock_adapter = MagicMock()
         mock_adapter.generate_stream.return_value = iter(["Hello ", "world"])
 
         patches = [
             patch("meetbot.services.query_service.QueryService._get_local_adapter",
                   return_value=mock_adapter),
+            patch("meetbot.services.query_service.QueryService._select_retrieval_level",
+                  return_value=selected_level),
             patch("meetbot.services.rag.retriever.Retriever", mock_retriever_cls),
             patch("meetbot.services.query_service._get_embedding_model",
                   return_value=MagicMock(embed_documents=lambda texts: [[0.1] * 8 for _ in texts])),
@@ -71,8 +73,6 @@ class TestQueryStreamRetrievalLevel:
                 embedding_model="fake-model",
                 k=k,
                 llm_mode="local",
-                retrieval_level=retrieval_level,
-                segment_count=segment_count,
             ))
         finally:
             for p in patches:
@@ -81,57 +81,59 @@ class TestQueryStreamRetrievalLevel:
         return events, recall_kwargs_capture
 
     def test_default_is_chunk(self):
-        """When retrieval_level is None, default to 'chunk'."""
-        events, kwargs = self._run_query_stream(retrieval_level=None)
+        """When LLM selects 'chunk', recall uses level='chunk'."""
+        events, kwargs = self._run_query_stream(selected_level="chunk")
         assert kwargs["level"] == "chunk"
         done_event = next(e for e in events if e["type"] == "done")
         assert done_event["retrieval_level"] == "chunk"
 
-    def test_explicit_document(self):
-        """retrieval_level='document' routes to document level."""
-        events, kwargs = self._run_query_stream(retrieval_level="document")
+    def test_auto_selected_document(self):
+        """When LLM selects 'document', recall uses level='document'."""
+        events, kwargs = self._run_query_stream(selected_level="document")
         assert kwargs["level"] == "document"
         assert kwargs["top_n"] == 1  # document retrieval uses 1
         done_event = next(e for e in events if e["type"] == "done")
         assert done_event["retrieval_level"] == "document"
 
-    def test_explicit_segment(self):
-        """retrieval_level='segment' routes to segment level."""
-        events, kwargs = self._run_query_stream(retrieval_level="segment", segment_count=7)
+    def test_auto_selected_segment(self):
+        """When LLM selects 'segment', recall uses level='segment'."""
+        events, kwargs = self._run_query_stream(selected_level="segment")
         assert kwargs["level"] == "segment"
         done_event = next(e for e in events if e["type"] == "done")
         assert done_event["retrieval_level"] == "segment"
 
-    def test_explicit_chunk(self):
-        """retrieval_level='chunk' routes to chunk level."""
-        events, kwargs = self._run_query_stream(retrieval_level="chunk")
-        assert kwargs["level"] == "chunk"
+    def test_llm_error_falls_back_to_chunk(self):
+        """_select_retrieval_level returns 'chunk' when the LLM call raises."""
+        from meetbot.services.query_service import QueryService
 
-    def test_invalid_level_defaults_to_chunk(self):
-        """Invalid retrieval_level falls back to 'chunk'."""
-        events, kwargs = self._run_query_stream(retrieval_level="invalid_value")
-        assert kwargs["level"] == "chunk"
+        mock_adapter = MagicMock()
+        mock_adapter.generate.side_effect = RuntimeError("LLM unavailable")
 
-    def test_segment_count_used_for_recall(self):
-        """When segment level with segment_count, recall top_n uses it."""
-        _, kwargs = self._run_query_stream(retrieval_level="segment", segment_count=10)
-        assert kwargs["level"] == "segment"
-        # top_n should be at least segment_count
-        assert kwargs["top_n"] >= 10
+        with patch("meetbot.services.query_service.QueryService._get_local_adapter",
+                   return_value=mock_adapter):
+            svc = QueryService()
+            result = svc._select_retrieval_level("Summarize the meeting", llm_mode="local")
 
-    def test_segment_count_ignored_for_chunk(self):
-        """segment_count is only relevant for segment level."""
-        _, kwargs1 = self._run_query_stream(retrieval_level="chunk", segment_count=10, k=4)
-        _, kwargs2 = self._run_query_stream(retrieval_level="chunk", k=4)
-        # Both should use the same recall parameters
-        assert kwargs1["top_n"] == kwargs2["top_n"]
+        assert result == "chunk"
+
+    def test_retrieval_level_note_event_emitted(self):
+        """A 'retrieval_level_note' event is emitted before 'done'."""
+        events, _ = self._run_query_stream(selected_level="segment")
+        types_in_order = [e["type"] for e in events]
+        assert "retrieval_level_note" in types_in_order
+        note_event = next(e for e in events if e["type"] == "retrieval_level_note")
+        assert note_event["level"] == "segment"
+        # Must come before done
+        note_idx = types_in_order.index("retrieval_level_note")
+        done_idx = types_in_order.index("done")
+        assert note_idx < done_idx
 
     def test_done_event_contains_retrieval_level(self):
         """'done' event should include retrieval_level field."""
-        events, _ = self._run_query_stream(retrieval_level="segment", segment_count=3)
+        events, _ = self._run_query_stream(selected_level="chunk")
         done_events = [e for e in events if e["type"] == "done"]
         assert len(done_events) == 1
-        assert done_events[0]["retrieval_level"] == "segment"
+        assert done_events[0]["retrieval_level"] == "chunk"
 
     def test_no_intent_import(self):
         """query_stream should not import detect_intent."""
@@ -139,59 +141,3 @@ class TestQueryStreamRetrievalLevel:
         import inspect
         source = inspect.getsource(qs_module.QueryService.query_stream)
         assert "detect_intent" not in source
-
-
-# ---------------------------------------------------------------------------
-# ws_chat: retrieval_level parsing
-# ---------------------------------------------------------------------------
-
-
-class TestWsChatRetrievalLevelParsing:
-    """Verify ws_chat.py correctly parses retrieval_level from payload."""
-
-    def test_valid_levels_accepted(self):
-        """Each valid level string should pass through unchanged."""
-        for level in ("document", "segment", "chunk"):
-            payload = {"question": "test", "llm_mode": "local", "retrieval_level": level}
-            parsed = payload.get("retrieval_level", "chunk")
-            if parsed not in ("document", "segment", "chunk"):
-                parsed = "chunk"
-            assert parsed == level
-
-    def test_missing_defaults_to_chunk(self):
-        """When retrieval_level is missing, default to 'chunk'."""
-        payload = {"question": "test", "llm_mode": "local"}
-        parsed = payload.get("retrieval_level", "chunk")
-        if parsed not in ("document", "segment", "chunk"):
-            parsed = "chunk"
-        assert parsed == "chunk"
-
-    def test_invalid_defaults_to_chunk(self):
-        """Invalid retrieval_level value defaults to 'chunk'."""
-        payload = {"question": "test", "retrieval_level": "banana"}
-        parsed = payload.get("retrieval_level", "chunk")
-        if parsed not in ("document", "segment", "chunk"):
-            parsed = "chunk"
-        assert parsed == "chunk"
-
-    def test_segment_count_parsed_as_int(self):
-        """segment_count should be parsed to int >= 1."""
-        payload = {"question": "test", "retrieval_level": "segment", "segment_count": "5"}
-        sc = payload.get("segment_count")
-        if sc is not None:
-            try:
-                sc = max(1, int(sc))
-            except (TypeError, ValueError):
-                sc = None
-        assert sc == 5
-
-    def test_segment_count_invalid_becomes_none(self):
-        """Non-numeric segment_count should become None."""
-        payload = {"question": "test", "segment_count": "abc"}
-        sc = payload.get("segment_count")
-        if sc is not None:
-            try:
-                sc = max(1, int(sc))
-            except (TypeError, ValueError):
-                sc = None
-        assert sc is None

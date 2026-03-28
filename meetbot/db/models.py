@@ -190,6 +190,35 @@ class Segment(Base):
 
 
 # =============================================================================
+# AppSetting — runtime-configurable key/value store (persisted to DB)
+# =============================================================================
+
+
+class AppSetting(Base):
+    """Runtime-editable configuration overrides stored in the database.
+
+    Keys match ``Settings`` field names (e.g. ``RAG_TOP_K``).  Values are
+    always stored as strings and coerced to the correct type on read.
+    Changes take effect immediately (hot-patched onto the live singleton)
+    except for keys in ``Settings._NEVER_OVERRIDE``.
+    """
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(120), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<AppSetting(key={self.key!r}, updated={self.updated_at})>"
+
+
+# =============================================================================
 # ChatSession / ChatMessage — persistent RAG conversation history
 # =============================================================================
 

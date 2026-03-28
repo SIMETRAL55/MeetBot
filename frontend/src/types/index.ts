@@ -50,10 +50,29 @@ export interface ChatMessage {
   content: string;
   sources?: ChatSource[];
   llm_backend?: string;
+  retrieval_method?: "vector" | "pageindex";
   /** FIX: Backend returns status field for streaming/completed/stopped/interrupted */
   status?: string;
   created_at?: string;
+  retrieval_level_note?: string;  // e.g. "segment" — set from retrieval_level_note WS event
 }
+
+/* ── PageIndex tree types ─────────────────────────────────────────────────── */
+
+export interface PageIndexNode {
+  node_id: string;
+  level: number;
+  title: string;
+  summary: string | Record<string, unknown>;
+  start_segment?: number;
+  end_segment?: number;
+  speakers?: string[];
+  participants?: string[];   // ROOT level
+  n_segments?: number;       // ROOT level
+  children: PageIndexNode[];
+}
+
+export type PageIndexTree = PageIndexNode;
 
 export interface QueryResponse {
   job_id: string;
@@ -61,4 +80,23 @@ export interface QueryResponse {
   answer: string;
   sources: ChatSource[];
   llm_backend: string;
+}
+
+export interface AppSetting {
+  key: string;
+  value: string;
+  description: string;
+  type: "string" | "boolean" | "integer" | "password";
+  sensitive: boolean;
+  group: string;
+  restart_required: boolean;
+}
+
+export interface UserProfile {
+  user_id: string;
+  username: string;
+  display_name: string;
+  is_admin: boolean;
+  created_at: string | null;
+  last_login: string | null;
 }

@@ -1,4 +1,4 @@
-import { Job, QueryResponse } from "../types";
+import { Job, QueryResponse, AppSetting, UserProfile } from "../types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
@@ -160,6 +160,10 @@ export const api = {
     method: "POST"
   }),
 
+  cancelPageIndex: (jobId: string) => fetcher<{ job_id: string; status: string; message: string }>(`/jobs/${jobId}/cancel-pageindex`, {
+    method: "POST"
+  }),
+
   /** Return the URL that the browser should use to stream the audio file. */
   getAudioUrl: (jobId: string): string => `${API_BASE_URL}/jobs/${jobId}/audio`,
 
@@ -195,6 +199,21 @@ export const api = {
   },
 
   getChatHistory: (jobId: string) => fetcher<import("../types").ChatMessage[]>(`/jobs/${jobId}/chat/history`),
+
+  getPageIndexTree: (jobId: string) => fetcher<import("../types").PageIndexTree>(`/jobs/${jobId}/pageindex-tree`),
+
+  // --- Settings & Profile ---
+
+  getMe: () => fetcher<UserProfile>("/me"),
+
+  getSettings: () => fetcher<AppSetting[]>("/settings"),
+
+  updateSetting: (key: string, value: string) =>
+    fetcher<{ ok: boolean; restart_required: boolean }>(`/settings/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    }),
 
   // --- Auth ---
 

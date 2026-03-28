@@ -209,6 +209,30 @@ def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
     seg_dicts = [s.to_dict() for s in segments]
     logger.info("run_reindex_v2: %d segments from DB (version=%d)", len(seg_dicts), version)
 
+    # Skip-if-unchanged: compare segment hash before starting the heavy work
+    from ..services.rag.indexer import _hash_segments
+    new_hash = _hash_segments(seg_dicts)
+    stored_hash = getattr(job, "segments_hash", "") or ""
+    if stored_hash and stored_hash == new_hash:
+        logger.info(
+            "run_reindex_v2: segments unchanged (hash=%s) — skipping ChromaDB rebuild",
+            new_hash[:12],
+        )
+        progress_cb = progress_manager.make_callback(job_id)
+        progress_cb("completed", 100, "Reindex skipped — transcript unchanged", 100.0)
+        update_job_status(
+            db, job_id, JobStatus.COMPLETED,
+            progress=100, stage_progress=100,
+            progress_message="Reindex skipped — transcript unchanged",
+            log_line="⏭ Reindex skipped: transcript unchanged since last index",
+        )
+        progress_manager.update(
+            job_id, stage="completed", progress=100,
+            message="Reindex skipped — transcript unchanged",
+            stage_progress=100, status="completed",
+        )
+        return
+
     # Cancel check before embedding-heavy work
     cancel_registry.check_and_raise(job_id)
 
@@ -264,6 +288,10 @@ def _run_reindex_v2(job, db, job_id: str, _stage, _fail) -> None:
 
     # Update DB
     update_job_result(db, job_id, db_dir=db_dir)
+
+    # Persist new hash so future reindexes skip if unchanged
+    job.segments_hash = new_hash
+    db.commit()
 
     # ── PageIndex rebuild (optional, conditional) ─────────────────────────
     if settings.PAGEINDEX_ENABLED:

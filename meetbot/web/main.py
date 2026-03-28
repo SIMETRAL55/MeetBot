@@ -79,6 +79,9 @@ def _register_pages() -> None:
         api_build_pageindex,
         api_cancel_pageindex,
         api_get_pageindex_tree,
+        api_get_settings,
+        api_update_setting,
+        api_get_me,
     )
     app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
@@ -98,6 +101,9 @@ def _register_pages() -> None:
     app.add_api_route("/api/jobs/{job_id}/build-pageindex", api_build_pageindex, methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/cancel-pageindex", api_cancel_pageindex, methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/pageindex-tree", api_get_pageindex_tree, methods=["GET"])
+    app.add_api_route("/api/settings",       api_get_settings,    methods=["GET"])
+    app.add_api_route("/api/settings/{key}", api_update_setting,  methods=["PUT"])
+    app.add_api_route("/api/me",             api_get_me,          methods=["GET"])
 
     # Register WebSocket endpoint for streaming chat (RAG Q&A).
     from .ws_chat import ws_chat
@@ -152,6 +158,22 @@ def _auth_middleware(client) -> None:
         return ui.navigate.to("/login")
 
 
+def _apply_db_settings() -> None:
+    """Load AppSetting overrides from the DB and hot-patch the live settings singleton."""
+    from ..db.database import get_session
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        n = settings.apply_db_overrides(db)
+        if n:
+            logger.info("Applied %d DB setting override(s)", n)
+    except Exception as exc:
+        # DB may not have the table yet on first run before migration; non-fatal.
+        logger.debug("_apply_db_settings: skipped — %s", exc)
+    finally:
+        db.close()
+
+
 def create_app() -> None:
     """Configure and create the NiceGUI application."""
     from ..logging_conf import setup_logging
@@ -161,6 +183,7 @@ def create_app() -> None:
 
     # Setup
     _setup_database()
+    _apply_db_settings()
     _setup_upload_dirs()
 
     # Rate limiting (slowapi)

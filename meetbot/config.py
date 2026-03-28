@@ -400,14 +400,15 @@ class Settings(BaseSettings):
         "openrouter",
         env="PAGEINDEX_LLM_BACKEND",
         description="LLM backend for PageIndex calls: 'openrouter' (recommended, "
-                    "free), 'local' (Ollama offline fallback), 'openai', or 'custom'.",
+                    "free), 'ollama' or 'local' (Ollama offline fallback), "
+                    "'openai', or 'custom'.",
     )
 
     PAGEINDEX_LLM_BASE_URL: str = Field(
-        "https://openrouter.ai/api/v1",
+        "",
         env="PAGEINDEX_LLM_BASE_URL",
         description="OpenAI-compatible API base URL for PageIndex LLM calls. "
-                    "Auto-set for 'openrouter' and 'openai' backends.",
+                    "Leave empty to auto-resolve from PAGEINDEX_LLM_BACKEND.",
     )
 
     PAGEINDEX_LLM_MODEL: str = Field(
@@ -422,6 +423,13 @@ class Settings(BaseSettings):
         env="PAGEINDEX_LLM_API_KEY",
         description="API key for the PageIndex LLM backend. Required for "
                     "OpenRouter/OpenAI. Use 'not-needed' for local servers.",
+    )
+
+    PAGEINDEX_LLM_MODEL_PATH: str = Field(
+        "",
+        env="PAGEINDEX_LLM_MODEL_PATH",
+        description="Path to a local HuggingFace model directory (safetensors). "
+                    "Used by the 'ollama' backend to import models without internet.",
     )
 
     PAGEINDEX_MAX_PAGE_TOKENS: int = Field(
@@ -478,6 +486,69 @@ class Settings(BaseSettings):
         env="ALLOWED_AUDIO_EXTENSIONS",
         description="Comma-separated list of allowed audio file extensions",
     )
+
+    PIPELINE_WORKERS: int = Field(
+        1,
+        env="PIPELINE_WORKERS",
+        description="Max concurrent pipeline jobs. Keep at 1 for GPU-constrained machines "
+                    "to prevent VRAM contention between Whisper and Pyannote.",
+    )
+
+    RATE_LIMIT_UPLOAD: str = Field(
+        "10/hour",
+        env="RATE_LIMIT_UPLOAD",
+        description="Upload rate limit per IP address (slowapi format, e.g. '10/hour').",
+    )
+
+    RATE_LIMIT_CHAT: str = Field(
+        "60/minute",
+        env="RATE_LIMIT_CHAT",
+        description="Chat WebSocket connection rate limit per IP address.",
+    )
+
+    # =========================================================================
+    # Runtime DB Overrides
+    # =========================================================================
+
+    # Keys that must never be hot-patched at runtime (security / structural).
+    # WEB_SECRET_KEY changing mid-session would invalidate all live tokens.
+    _NEVER_OVERRIDE: ClassVar[set[str]] = {
+        "WEB_SECRET_KEY",
+        "WEB_STORAGE_SECRET",
+        "DB_PATH",
+    }
+
+    def apply_db_overrides(self, session) -> int:
+        """Load AppSetting rows from DB and hot-patch the live settings singleton.
+
+        Called once at server startup after the DB is initialised. Any key in
+        ``_NEVER_OVERRIDE`` is silently skipped.
+
+        Args:
+            session: SQLAlchemy Session (caller is responsible for closing it).
+
+        Returns:
+            Number of overrides successfully applied.
+        """
+        from .db.models import AppSetting as _AppSetting
+        _log = logging.getLogger("meetbot.config")
+        rows = session.query(_AppSetting).all()
+        applied = 0
+        for row in rows:
+            key = row.key
+            if key in self._NEVER_OVERRIDE:
+                continue
+            if not hasattr(self, key):
+                _log.debug("apply_db_overrides: unknown key %s — skipped", key)
+                continue
+            current = getattr(self, key)
+            try:
+                coerced = _coerce(current, row.value)
+                object.__setattr__(self, key, coerced)
+                applied += 1
+            except Exception as exc:
+                _log.warning("apply_db_overrides: skip %s — %s", key, exc)
+        return applied
 
     def get_allowed_extensions(self) -> list[str]:
         """Get allowed audio extensions as a list."""
@@ -580,6 +651,7 @@ class Settings(BaseSettings):
             "openrouter": "https://openrouter.ai/api/v1",
             "openai": "https://api.openai.com/v1",
             "local": "http://localhost:11434/v1",
+            "ollama": "http://localhost:11434/v1",
         }
         if self.PAGEINDEX_LLM_BASE_URL:
             return self.PAGEINDEX_LLM_BASE_URL
@@ -602,6 +674,27 @@ class Settings(BaseSettings):
     def get_prepared_docs_dir(self) -> Path:
         """Get prepared documents directory path as pathlib.Path."""
         return Path(self.PREPARED_DOCS_DIR).expanduser().resolve()
+
+
+# ============================================================================
+# Type coercion helper for DB overrides
+# ============================================================================
+
+
+def _coerce(current, raw: str):
+    """Coerce a DB string value to match the Python type of *current*.
+
+    Handles bool, int, float, str, and Optional[str] (None when raw is
+    'none', 'null', or empty string).
+    """
+    if isinstance(current, bool):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    if isinstance(current, int):
+        return int(raw)
+    if isinstance(current, float):
+        return float(raw)
+    # str / Optional[str] / None
+    return raw if raw.strip().lower() not in ("none", "null", "") else None
 
 
 # ============================================================================

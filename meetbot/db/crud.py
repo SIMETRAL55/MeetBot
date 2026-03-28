@@ -12,7 +12,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from .models import User, Job, JobStatus, Segment, ChatSession, ChatMessage
+from .models import User, Job, JobStatus, Segment, ChatSession, ChatMessage, AppSetting
 
 logger = logging.getLogger(__name__)
 
@@ -892,3 +892,41 @@ def bump_transcript_version(db: Session, job_id: str) -> int:
         job_id[:8], current, job.transcript_version,
     )
     return job.transcript_version
+
+
+# =============================================================================
+# AppSetting CRUD — runtime-configurable key/value store
+# =============================================================================
+
+
+def get_all_settings(db: Session) -> list[AppSetting]:
+    """Return all AppSetting rows ordered by key."""
+    return db.query(AppSetting).order_by(AppSetting.key).all()
+
+
+def get_setting(db: Session, key: str) -> Optional[AppSetting]:
+    """Return a single AppSetting by key, or None if not found."""
+    return db.query(AppSetting).filter(AppSetting.key == key).first()
+
+
+def upsert_setting(db: Session, key: str, value: str) -> AppSetting:
+    """Insert or update an AppSetting row.
+
+    Args:
+        db: Database session.
+        key: Setting key (must match a ``Settings`` field name).
+        value: New string value.
+
+    Returns:
+        The created or updated AppSetting row.
+    """
+    row = get_setting(db, key)
+    if row:
+        row.value = value
+        row.updated_at = datetime.now(timezone.utc)
+    else:
+        row = AppSetting(key=key, value=value, updated_at=datetime.now(timezone.utc))
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row

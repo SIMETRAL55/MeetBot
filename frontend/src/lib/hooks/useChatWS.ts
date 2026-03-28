@@ -53,8 +53,6 @@ export function useChatWS(jobId: string) {
     (
       question: string,
       llmMode: "local" | "hf" = "local",
-      retrievalLevel: "chunk" | "segment" | "document" = "chunk",
-      segmentCount?: number,
       retrievalMethod: "vector" | "pageindex" = "vector",
     ) => {
       if (!question.trim() || !jobId) return;
@@ -64,7 +62,7 @@ export function useChatWS(jobId: string) {
       setLoading(true);
 
       // Add an empty assistant message we'll fill with streaming tokens
-      setMessages((prev) => [...prev, { role: "assistant", content: "" }]);
+      setMessages((prev) => [...prev, { role: "assistant", content: "", retrieval_method: retrievalMethod }]);
 
       const wsUrl = `${getWsBaseUrl()}/ws/chat/${jobId}`;
       const ws = new WebSocket(wsUrl);
@@ -72,16 +70,11 @@ export function useChatWS(jobId: string) {
 
       ws.onopen = () => {
         setConnected(true);
-        const payload: Record<string, unknown> = {
+        ws.send(JSON.stringify({
           question,
           llm_mode: llmMode,
-          retrieval_level: retrievalLevel,
           retrieval_method: retrievalMethod,
-        };
-        if (retrievalLevel === "segment" && segmentCount != null) {
-          payload.segment_count = segmentCount;
-        }
-        ws.send(JSON.stringify(payload));
+        }));
       };
 
       ws.onmessage = (event) => {
@@ -94,7 +87,7 @@ export function useChatWS(jobId: string) {
                 const copy = [...prev];
                 const last = copy[copy.length - 1];
                 if (last?.role === "assistant") {
-                  copy[copy.length - 1] = { ...last, sources: payload.data };
+                  copy[copy.length - 1] = { ...last, sources: payload.data, retrieval_method: retrievalMethod };
                 }
                 return copy;
               });
@@ -114,6 +107,17 @@ export function useChatWS(jobId: string) {
               });
               break;
 
+            case "retrieval_level_note":
+              setMessages((prev) => {
+                const copy = [...prev];
+                const last = copy[copy.length - 1];
+                if (last?.role === "assistant") {
+                  copy[copy.length - 1] = { ...last, retrieval_level_note: payload.level };
+                }
+                return copy;
+              });
+              break;
+
             case "done":
               // Replace initial sources with answer-similarity-filtered final list
               if (payload.filtered_sources && Array.isArray(payload.filtered_sources)) {
@@ -124,6 +128,7 @@ export function useChatWS(jobId: string) {
                     copy[copy.length - 1] = {
                       ...last,
                       sources: payload.filtered_sources,
+                      retrieval_method: retrievalMethod,
                     };
                   }
                   return copy;
