@@ -42,8 +42,8 @@ export default function LoginPage() {
       <div className="w-full max-w-md space-y-8">
         {/* Brand */}
         <div className="text-center">
-          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-gradient-to-br from-teal-500 to-violet-600 text-3xl shadow-lg shadow-teal-500/25">
-            <Mic className="h-8 w-8 text-white" />
+          <div className="mx-auto mb-4 flex h-16 w-16 items-center justify-center rounded-2xl bg-amber-500/10 ring-1 ring-amber-500/25 shadow-lg shadow-amber-500/10">
+            <Mic className="h-8 w-8 text-amber-400" />
           </div>
           <h1 className="text-3xl font-bold tracking-tight text-white">
             Welcome to MeetBot
@@ -61,7 +61,7 @@ export default function LoginPage() {
               onClick={() => { setMode("login"); setError(null); }}
               className={`flex-1 rounded-md py-2 text-sm font-semibold transition-colors ${
                 mode === "login"
-                  ? "bg-slate-800 text-teal-400 shadow"
+                  ? "bg-slate-800 text-amber-400 shadow"
                   : "text-slate-500 hover:text-slate-300"
               }`}
             >
@@ -71,7 +71,7 @@ export default function LoginPage() {
               onClick={() => { setMode("register"); setError(null); }}
               className={`flex-1 rounded-md py-2 text-sm font-semibold transition-colors ${
                 mode === "register"
-                  ? "bg-slate-800 text-violet-400 shadow"
+                  ? "bg-slate-800 text-amber-400 shadow"
                   : "text-slate-500 hover:text-slate-300"
               }`}
             >
@@ -91,7 +91,7 @@ export default function LoginPage() {
                 onChange={(e) => setUsername(e.target.value)}
                 placeholder="Enter your username"
                 autoComplete="username"
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500/50"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20"
               />
             </div>
 
@@ -106,7 +106,7 @@ export default function LoginPage() {
                   value={displayName}
                   onChange={(e) => setDisplayName(e.target.value)}
                   placeholder="How should we call you?"
-                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500/50"
+                  className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20"
                 />
               </div>
             )}
@@ -122,7 +122,7 @@ export default function LoginPage() {
                 onChange={(e) => setPassword(e.target.value)}
                 placeholder="Enter your password"
                 autoComplete={mode === "login" ? "current-password" : "new-password"}
-                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-teal-500 focus:ring-1 focus:ring-teal-500/50"
+                className="w-full rounded-lg border border-slate-700 bg-slate-950 px-4 py-2.5 text-sm text-slate-200 placeholder:text-slate-500 outline-none transition focus:border-amber-500/50 focus:ring-1 focus:ring-amber-500/20"
               />
             </div>
 
@@ -135,7 +135,7 @@ export default function LoginPage() {
             <button
               type="submit"
               disabled={loading || !username.trim() || !password}
-              className="flex w-full items-center justify-center gap-2 rounded-lg bg-teal-500 py-2.5 text-sm font-semibold text-teal-950 transition-colors hover:bg-teal-400 disabled:opacity-50 shadow-[0_0_20px_rgba(20,184,166,0.3)]"
+              className="flex w-full items-center justify-center gap-2 rounded-lg bg-amber-500 py-2.5 text-sm font-semibold text-amber-950 transition-colors hover:bg-amber-400 disabled:opacity-50 shadow-[0_0_20px_rgba(245,158,11,0.25)]"
             >
               {loading ? (
                 <Loader2 className="h-4 w-4 animate-spin" />

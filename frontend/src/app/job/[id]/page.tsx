@@ -24,10 +24,7 @@ import {
 /* ── Small section label ─────────────────────────────────────────────────── */
 function SectionLabel({ children }: { children: React.ReactNode }) {
   return (
-    <p
-      className="mb-3 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700"
-      style={{ fontFamily: "var(--font-mono, monospace)" }}
-    >
+    <p className="font-mono-editorial mb-3 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
       {children}
     </p>
   );
@@ -53,7 +50,7 @@ function ActionBtn({
     ghost:
       "border border-white/6 bg-white/2 text-slate-400 hover:bg-white/5 hover:text-slate-200",
     primary:
-      "border border-teal-500/30 bg-teal-500/10 text-teal-400 hover:bg-teal-500/20",
+      "border border-amber-500/30 bg-amber-500/10 text-amber-400 hover:bg-amber-500/20",
     danger:
       "border border-red-500/30 bg-red-500/8 text-red-400 hover:bg-red-500/15",
     amber:
@@ -193,7 +190,7 @@ export default function JobDetailPage() {
     return (
       <div className="flex h-48 items-center justify-center gap-2 text-sm text-slate-600">
         <Loader2 className="h-4 w-4 animate-spin" />
-        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>Loading…</span>
+        <span className="font-mono-editorial">Loading…</span>
       </div>
     );
   }
@@ -221,29 +218,20 @@ export default function JobDetailPage() {
       {/* ── Job header ─────────────────────────────────────────────────────── */}
       <div className="mb-6 flex items-center gap-3">
         <div className="flex-1 min-w-0">
-          <h1
-            className="truncate text-lg font-semibold text-slate-200"
-            style={{ fontFamily: "var(--font-display, serif)" }}
-          >
+          <h1 className="font-display truncate text-lg font-semibold text-slate-200">
             {job?.original_filename || "Job Details"}
           </h1>
           <div className="mt-1 flex items-center gap-2">
             <span
-              className={`h-1.5 w-1.5 rounded-full ${connected ? "animate-pulse bg-teal-500" : "bg-yellow-500"}`}
+              className={`h-1.5 w-1.5 rounded-full ${connected ? "animate-pulse bg-amber-500" : "bg-yellow-500"}`}
             />
-            <span
-              className="text-[10px] text-slate-600"
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
-            >
+            <span className="font-mono-editorial text-[10px] text-slate-600">
               {connected ? "live" : "disconnected"}
             </span>
             {job?.status && (
               <>
                 <span className="text-slate-800">·</span>
-                <span
-                  className="text-[10px] text-slate-600"
-                  style={{ fontFamily: "var(--font-mono, monospace)" }}
-                >
+                <span className="font-mono-editorial text-[10px] text-slate-600">
                   {job.status}
                 </span>
               </>
@@ -314,10 +302,7 @@ export default function JobDetailPage() {
               <SectionLabel>Vector Index</SectionLabel>
               {isReindexing ? (
                 <div className="space-y-3">
-                  <div
-                    className="flex items-center gap-2 text-xs text-orange-300"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
-                  >
+                  <div className="font-mono-editorial flex items-center gap-2 text-xs text-orange-300">
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
                     Reindexing…
                   </div>
@@ -351,26 +336,17 @@ export default function JobDetailPage() {
                 <div className="mb-3 flex items-center gap-2">
                   <SectionLabel>PageIndex</SectionLabel>
                   {pageindexReady && (
-                    <span
-                      className="ml-auto rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold text-amber-400 ring-1 ring-amber-500/20"
-                      style={{ fontFamily: "var(--font-mono, monospace)" }}
-                    >
+                    <span className="font-mono-editorial ml-auto rounded-full bg-amber-500/10 px-2 py-0.5 text-[9px] font-semibold text-amber-400 ring-1 ring-amber-500/20">
                       ready
                     </span>
                   )}
                   {pageindexBuilding && (
-                    <span
-                      className="ml-auto rounded-full bg-white/4 px-2 py-0.5 text-[9px] text-slate-500 ring-1 ring-white/5"
-                      style={{ fontFamily: "var(--font-mono, monospace)" }}
-                    >
+                    <span className="font-mono-editorial ml-auto rounded-full bg-white/4 px-2 py-0.5 text-[9px] text-slate-500 ring-1 ring-white/5">
                       building
                     </span>
                   )}
                   {pageindexFailed && (
-                    <span
-                      className="ml-auto rounded-full bg-red-500/10 px-2 py-0.5 text-[9px] text-red-400 ring-1 ring-red-500/15"
-                      style={{ fontFamily: "var(--font-mono, monospace)" }}
-                    >
+                    <span className="font-mono-editorial ml-auto rounded-full bg-red-500/10 px-2 py-0.5 text-[9px] text-red-400 ring-1 ring-red-500/15">
                       {pageindexStatus === "cancelled" ? "cancelled" : "failed"}
                     </span>
                   )}
@@ -378,10 +354,7 @@ export default function JobDetailPage() {
 
                 {pageindexBuilding ? (
                   <div className="space-y-3">
-                    <div
-                      className="flex items-center gap-2 text-xs text-amber-400/80"
-                      style={{ fontFamily: "var(--font-mono, monospace)" }}
-                    >
+                    <div className="font-mono-editorial flex items-center gap-2 text-xs text-amber-400/80">
                       <Loader2 className="h-3.5 w-3.5 animate-spin" />
                       Building tree…
                     </div>
@@ -438,10 +411,7 @@ export default function JobDetailPage() {
         <div className="mt-8">
           <div className="mb-4 flex items-center gap-2">
             <Network className="h-4 w-4 text-amber-500/60" />
-            <h2
-              className="text-sm font-semibold text-slate-400"
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
-            >
+            <h2 className="font-mono-editorial text-sm font-semibold text-slate-400">
               PageIndex Tree
             </h2>
           </div>

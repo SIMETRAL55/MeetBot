@@ -4,7 +4,6 @@ import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { api } from "../../lib/api";
 import { AppSetting, UserProfile } from "../../types";
-import { Header } from "../../components/Header";
 
 const GROUP_ORDER = [
   "Authentication",
@@ -86,7 +85,7 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
               <span className="text-[10px] text-slate-500 animate-pulse">saving…</span>
             )}
             {saveState === "saved" && (
-              <span className="text-[10px] text-teal-400">✓ saved</span>
+              <span className="text-[10px] text-green-400">✓ saved</span>
             )}
             {saveState === "error" && (
               <span className="text-[10px] text-red-400">✗ error</span>
@@ -223,15 +222,10 @@ export default function SettingsPage() {
   };
 
   return (
-    <div className="min-h-screen bg-[#07090f] text-slate-200">
-      <Header />
-      <main className="mx-auto max-w-4xl px-6 py-12">
-        <h1
-          className="text-3xl font-bold text-white mb-8"
-          style={{ fontFamily: "var(--font-fraunces), Georgia, serif" }}
-        >
-          Settings
-        </h1>
+    <div className="mx-auto max-w-4xl">
+      <h1 className="font-display text-3xl font-bold text-white mb-8">
+        Settings
+      </h1>
 
         {loading && (
           <p className="text-slate-500 text-sm animate-pulse">Loading…</p>
@@ -309,7 +303,6 @@ export default function SettingsPage() {
               </section>
             );
           })}
-      </main>
     </div>
   );
 }
