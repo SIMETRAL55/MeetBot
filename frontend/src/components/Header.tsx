@@ -67,7 +67,6 @@ export function Header() {
         >
           <span
             className="font-mono-editorial text-sm font-semibold tracking-[0.15em] text-amber-400 uppercase"
-            style={{ fontFamily: "var(--font-mono, monospace)" }}
           >
             MEETBOT
           </span>
@@ -94,16 +93,14 @@ export function Header() {
                 )}
                 {isLast ? (
                   <span
-                    className="truncate text-xs font-medium text-slate-300"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
+                    className="font-mono-editorial truncate text-xs font-medium text-slate-300"
                   >
                     {crumb.label}
                   </span>
                 ) : (
                   <Link
                     href={crumb.href}
-                    className="truncate text-xs font-medium text-slate-600 transition-colors hover:text-slate-400"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
+                    className="font-mono-editorial truncate text-xs font-medium text-slate-600 transition-colors hover:text-slate-400"
                   >
                     {crumb.label}
                   </Link>
@@ -128,8 +125,7 @@ export function Header() {
               <div className="flex items-center gap-1.5 rounded-md border border-white/5 bg-white/3 px-2.5 py-1.5">
                 <UserIcon className="h-3 w-3 text-amber-500/70" />
                 <span
-                  className="text-xs text-slate-400"
-                  style={{ fontFamily: "var(--font-mono, monospace)" }}
+                  className="font-mono-editorial text-xs text-slate-400"
                 >
                   {user.display_name || user.username}
                 </span>

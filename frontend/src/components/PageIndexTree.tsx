@@ -41,8 +41,7 @@ function SpeakerChip({
 }) {
   return (
     <span
-      className={`inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${speakerColour(speaker, idx)}`}
-      style={{ fontFamily: "var(--font-mono, monospace)" }}
+      className={`font-mono-editorial inline-flex items-center rounded px-1.5 py-0.5 text-[10px] font-semibold ring-1 ${speakerColour(speaker, idx)}`}
     >
       {speaker}
     </span>
@@ -55,8 +54,7 @@ function SegBadge({ start, end }: { start?: number; end?: number }) {
   const count = Math.max(0, end - start);
   return (
     <span
-      className="ml-auto flex items-center gap-1 rounded bg-white/4 px-1.5 py-0.5 text-[10px] text-slate-500 ring-1 ring-white/5"
-      style={{ fontFamily: "var(--font-mono, monospace)" }}
+      className="font-mono-editorial ml-auto flex items-center gap-1 rounded bg-white/4 px-1.5 py-0.5 text-[10px] text-slate-500 ring-1 ring-white/5"
     >
       <Hash className="h-2.5 w-2.5" />
       {count} seg{count !== 1 ? "s" : ""}
@@ -92,10 +90,7 @@ function SubtopicNode({
       <div className="flex items-start gap-2">
         <div className="mt-0.5 flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span
-              className="text-xs font-medium text-slate-300"
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
-            >
+            <span className="font-mono-editorial text-xs font-medium text-slate-300">
               {node.node_id}
             </span>
             <span className="truncate text-xs text-slate-400">{node.title}</span>
@@ -159,10 +154,7 @@ function TopicCard({
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span
-              className="shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/80 ring-1 ring-amber-500/15"
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
-            >
+            <span className="font-mono-editorial shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/80 ring-1 ring-amber-500/15">
               {node.node_id}
             </span>
             <span className="truncate text-sm font-medium text-slate-200">{node.title}</span>
@@ -242,9 +234,7 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
     return (
       <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
         <Network className="h-4 w-4 animate-pulse text-amber-500/50" />
-        <span style={{ fontFamily: "var(--font-mono, monospace)" }}>
-          Loading PageIndex tree…
-        </span>
+        <span className="font-mono-editorial">Loading PageIndex tree…</span>
       </div>
     );
   }
@@ -267,16 +257,10 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
           <Network className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span
-                className="text-xs font-semibold text-amber-500/70"
-                style={{ fontFamily: "var(--font-mono, monospace)" }}
-              >
+              <span className="font-mono-editorial text-xs font-semibold text-amber-500/70">
                 ROOT
               </span>
-              <h3
-                className="font-display text-base font-semibold text-slate-100"
-                style={{ fontFamily: "var(--font-display, serif)" }}
-              >
+              <h3 className="font-display text-base font-semibold text-slate-100">
                 {tree.title}
               </h3>
             </div>
@@ -288,10 +272,7 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
             {/* Meta row */}
             <div className="mt-3 flex flex-wrap items-center gap-3">
               {tree.n_segments != null && (
-                <span
-                  className="flex items-center gap-1 text-[10px] text-slate-600"
-                  style={{ fontFamily: "var(--font-mono, monospace)" }}
-                >
+                <span className="font-mono-editorial flex items-center gap-1 text-[10px] text-slate-600">
                   <FileText className="h-3 w-3" />
                   {tree.n_segments} segments
                 </span>
@@ -307,10 +288,7 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
                 </span>
               )}
               {tree.children.length > 0 && (
-                <span
-                  className="text-[10px] text-slate-700"
-                  style={{ fontFamily: "var(--font-mono, monospace)" }}
-                >
+                <span className="font-mono-editorial text-[10px] text-slate-700">
                   {tree.children.length} topic{tree.children.length !== 1 ? "s" : ""}
                 </span>
               )}
@@ -338,10 +316,7 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
 
       {highlightRange && (
         <div className="flex items-center justify-between rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-          <span
-            className="text-xs text-amber-500/70"
-            style={{ fontFamily: "var(--font-mono, monospace)" }}
-          >
+          <span className="font-mono-editorial text-xs text-amber-500/70">
             Highlighting segments {highlightRange[0]}–{highlightRange[1]}
           </span>
           <button
