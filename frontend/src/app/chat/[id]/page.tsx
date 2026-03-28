@@ -51,15 +51,14 @@ function SourceAccordion({
         onClick={() => setIsOpen(!isOpen)}
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-slate-500 transition-colors hover:text-slate-400"
       >
-        <FileText className={`h-3 w-3 shrink-0 ${isPageIndex ? "text-amber-500/60" : "text-teal-500/60"}`} />
+        <FileText className={`h-3 w-3 shrink-0 ${isPageIndex ? "text-amber-500/60" : "text-slate-500/60"}`} />
         <span className="flex-1">Retrieved context — {label}</span>
         <span
-          className={`rounded px-1.5 py-0.5 text-[9px] font-semibold ring-1 ${
+          className={`font-mono-editorial rounded px-1.5 py-0.5 text-[9px] font-semibold ring-1 ${
             isPageIndex
               ? "bg-amber-500/10 text-amber-400/80 ring-amber-500/20"
-              : "bg-teal-500/10 text-teal-400/80 ring-teal-500/20"
+              : "bg-slate-500/10 text-slate-400/80 ring-slate-500/20"
           }`}
-          style={{ fontFamily: "var(--font-mono, monospace)" }}
         >
           {isPageIndex ? "pageindex" : "vector"}
         </span>
@@ -72,47 +71,34 @@ function SourceAccordion({
             <div key={i}>
               <div className="mb-1 flex flex-wrap items-center gap-1.5">
                 {isPageIndex && src.node_title ? (
-                  <span
-                    className="rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/80 ring-1 ring-amber-500/20"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
-                  >
+                  <span className="font-mono-editorial rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/80 ring-1 ring-amber-500/20">
                     {src.node_title}
                   </span>
                 ) : (
                   <span
-                    className="text-[10px] text-slate-600"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
+                    className="font-mono-editorial text-[10px] text-slate-600"
                     title="Distance (lower is better)"
                   >
                     dist:{src.distance?.toFixed(3) ?? "N/A"}
                   </span>
                 )}
                 {src.node_id && (
-                  <span
-                    className="text-[10px] text-slate-700"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
-                  >
+                  <span className="font-mono-editorial text-[10px] text-slate-700">
                     {src.node_id}
                   </span>
                 )}
-                <span
-                  className="text-[10px] text-violet-400/70"
-                  style={{ fontFamily: "var(--font-mono, monospace)" }}
-                >
+                <span className="font-mono-editorial text-[10px] text-slate-400/70">
                   {src.speaker}
                 </span>
                 {typeof src.start === "number" && (
-                  <span
-                    className="text-[10px] text-slate-700"
-                    style={{ fontFamily: "var(--font-mono, monospace)" }}
-                  >
+                  <span className="font-mono-editorial text-[10px] text-slate-700">
                     {fmtTime(src.start)}–{fmtTime(src.end)}
                   </span>
                 )}
               </div>
               <p
                 className={`border-l-2 pl-2 text-[11px] leading-relaxed text-slate-400 ${
-                  isPageIndex ? "border-amber-500/30" : "border-teal-500/30"
+                  isPageIndex ? "border-amber-500/30" : "border-slate-500/20"
                 }`}
               >
                 &ldquo;{src.text}&rdquo;
@@ -143,14 +129,13 @@ function PillToggle({
           onClick={() => !opt.disabled && onChange(opt.value)}
           disabled={opt.disabled}
           title={opt.title}
-          className={`flex-1 rounded-md px-3 py-1.5 text-[11px] font-semibold transition-all ${
+          className={`font-mono-editorial flex-1 rounded-md px-3 py-1.5 text-[11px] font-semibold transition-all ${
             value === opt.value
               ? "bg-amber-500/15 text-amber-400 shadow-sm ring-1 ring-amber-500/25"
               : opt.disabled
               ? "cursor-not-allowed text-slate-700"
               : "text-slate-500 hover:text-slate-300"
           }`}
-          style={{ fontFamily: "var(--font-mono, monospace)" }}
         >
           {opt.label}
         </button>
@@ -234,10 +219,7 @@ export default function ChatPage() {
 
           {/* Job info */}
           <div>
-            <p
-              className="mb-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700"
-              style={{ fontFamily: "var(--font-mono, monospace)" }}
-            >
+            <p className="font-mono-editorial mb-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
               Session
             </p>
             <p className="truncate text-sm font-medium text-slate-300">
@@ -246,13 +228,10 @@ export default function ChatPage() {
             <div className="mt-2 flex items-center gap-2">
               <span
                 className={`h-1.5 w-1.5 rounded-full ${
-                  loading ? "animate-pulse bg-amber-500" : "bg-teal-500"
+                  loading ? "animate-pulse bg-amber-500" : "bg-slate-500"
                 }`}
               />
-              <span
-                className="text-[10px] text-slate-600"
-                style={{ fontFamily: "var(--font-mono, monospace)" }}
-              >
+              <span className="font-mono-editorial text-[10px] text-slate-600">
                 {statusLabel}
               </span>
             </div>
@@ -264,10 +243,7 @@ export default function ChatPage() {
           <div>
             <div className="mb-2 flex items-center gap-1.5">
               <Network className="h-3 w-3 text-slate-700" />
-              <p
-                className="text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700"
-                style={{ fontFamily: "var(--font-mono, monospace)" }}
-              >
+              <p className="font-mono-editorial text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
                 Retrieval
               </p>
             </div>
@@ -297,10 +273,7 @@ export default function ChatPage() {
           <div>
             <div className="mb-2 flex items-center gap-1.5">
               <Settings2 className="h-3 w-3 text-slate-700" />
-              <p
-                className="text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700"
-                style={{ fontFamily: "var(--font-mono, monospace)" }}
-              >
+              <p className="font-mono-editorial text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
                 LLM Backend
               </p>
             </div>
@@ -331,14 +304,12 @@ export default function ChatPage() {
       <div className="flex flex-1 flex-col overflow-hidden">
 
         {/* Messages */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8 space-y-8">
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8">
+          <div className="mx-auto max-w-3xl space-y-8">
           {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-center">
+            <div className="flex h-[calc(100vh-14rem)] flex-col items-center justify-center text-center">
               <Bot className="mb-4 h-10 w-10 text-slate-800" />
-              <p
-                className="text-base font-semibold text-slate-400"
-                style={{ fontFamily: "var(--font-display, serif)" }}
-              >
+              <p className="font-display text-base font-semibold text-slate-400">
                 Ask about your transcript
               </p>
               <p className="mt-2 max-w-sm text-sm text-slate-600">
@@ -349,26 +320,34 @@ export default function ChatPage() {
             messages.map((msg, i) => (
               <div
                 key={i}
-                className={`animate-message-in flex gap-4 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`animate-message-in flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {msg.role === "assistant" && (
-                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/10 ring-1 ring-amber-500/20">
-                    <Bot className="h-3.5 w-3.5 text-amber-500/70" />
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 ring-1 ring-amber-500/20">
+                    <Bot className="h-4 w-4 text-amber-500/70" />
                   </div>
                 )}
 
                 <div
-                  className={`max-w-[80%] sm:max-w-[70%] ${
+                  className={`max-w-[80%] sm:max-w-[72%] ${
                     msg.role === "user"
-                      ? "rounded-2xl rounded-tr-sm bg-[#1a1f35] px-5 py-3.5 text-slate-200 ring-1 ring-white/6"
-                      : "rounded-2xl rounded-tl-sm bg-[#0d1020] px-5 py-4 text-slate-300 ring-1 ring-white/4"
+                      ? "rounded-2xl rounded-tr-sm bg-amber-500/8 px-5 py-3.5 text-slate-100 ring-1 ring-amber-500/15"
+                      : "rounded-2xl rounded-tl-sm bg-[#0e1220] px-5 py-4 text-slate-300 ring-1 ring-white/6 border-l-2 border-amber-500/20"
                   }`}
                 >
                   {msg.role === "assistant" ? (
                     <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-p:text-slate-300 prose-pre:bg-[#080b14] prose-pre:border prose-pre:border-white/5 prose-code:text-amber-300 prose-headings:text-slate-200">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content || (loading && i === messages.length - 1 ? "…" : "")}
-                      </ReactMarkdown>
+                      {msg.content ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      ) : loading && i === messages.length - 1 ? (
+                        <span className="inline-flex items-center gap-1 py-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500/50 animate-bounce [animation-delay:0ms]" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500/50 animate-bounce [animation-delay:150ms]" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-amber-500/50 animate-bounce [animation-delay:300ms]" />
+                        </span>
+                      ) : null}
                       {msg.sources && (
                         <SourceAccordion
                           sources={msg.sources}
@@ -376,10 +355,7 @@ export default function ChatPage() {
                         />
                       )}
                       {msg.retrieval_level_note && (
-                        <p
-                          className="mt-2 text-[10px] text-slate-700"
-                          style={{ fontFamily: "var(--font-mono, monospace)" }}
-                        >
+                        <p className="font-mono-editorial mt-2 text-[10px] text-slate-700">
                           retrieved via {msg.retrieval_level_note}-level search
                         </p>
                       )}
@@ -392,13 +368,14 @@ export default function ChatPage() {
                 </div>
 
                 {msg.role === "user" && (
-                  <div className="mt-1 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-white/5 ring-1 ring-white/8">
-                    <User className="h-3.5 w-3.5 text-slate-400" />
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-amber-500/10 ring-1 ring-amber-500/20">
+                    <User className="h-4 w-4 text-amber-500/70" />
                   </div>
                 )}
               </div>
             ))
           )}
+          </div>
         </div>
 
         {/* Input bar */}
@@ -447,10 +424,7 @@ export default function ChatPage() {
             </button>
           </form>
 
-          <p
-            className="mt-2 text-center text-[10px] text-slate-700"
-            style={{ fontFamily: "var(--font-mono, monospace)" }}
-          >
+          <p className="font-mono-editorial mt-2 text-center text-[10px] text-slate-700">
             MeetBot may make mistakes — verify important information.
           </p>
         </div>
