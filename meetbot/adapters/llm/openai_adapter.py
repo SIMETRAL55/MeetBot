@@ -216,6 +216,42 @@ def _ensure_model_available(model: str, model_path: str = "") -> None:
         )
 
 
+def get_pageindex_client(settings: "Settings") -> "openai.OpenAI":
+    """
+    Build and return a configured ``openai.OpenAI`` client for PageIndex LLM calls.
+
+    For the ``vertexai`` backend, fetches a short-lived access token via
+    Application Default Credentials (``google.auth.default``). The token is
+    refreshed on every call so it is always valid.
+
+    For all other backends, uses the static ``PAGEINDEX_LLM_API_KEY``.
+    """
+    import openai
+
+    base_url = settings.get_pageindex_base_url()
+
+    if settings.PAGEINDEX_LLM_BACKEND == "vertexai":
+        try:
+            from google.auth import default as google_auth_default
+            import google.auth.transport.requests as google_requests
+        except ImportError as exc:
+            raise RuntimeError(
+                "The 'google-auth' package is required for PAGEINDEX_LLM_BACKEND='vertexai'. "
+                "Install it with: pip install google-auth"
+            ) from exc
+
+        credentials, _ = google_auth_default(
+            scopes=["https://www.googleapis.com/auth/cloud-platform"]
+        )
+        credentials.refresh(google_requests.Request())
+        api_key = credentials.token
+        logger.debug("vertexai: refreshed access token (len=%d)", len(api_key or ""))
+    else:
+        api_key = settings.PAGEINDEX_LLM_API_KEY or "not-needed"
+
+    return openai.OpenAI(base_url=base_url, api_key=api_key)
+
+
 @contextmanager
 def pageindex_env(settings: "Settings"):
     """
