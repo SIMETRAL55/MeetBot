@@ -35,7 +35,7 @@ alembic.ini
 *.sublime-workspace
 .vim/
 *.iml
-
+demo.py
 
 # ============================================================================
 # Environment & Configuration
@@ -196,3 +196,5 @@ vendor/
 
 CLAUDE.md
 tasks/
+.claude/
+docs/
