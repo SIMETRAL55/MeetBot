@@ -66,6 +66,18 @@ class User(Base):
     )
     last_login = Column(DateTime, nullable=True)
 
+    # Email authentication & security
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
+    password_reset_token = Column(String(64), nullable=True)
+    password_reset_expires = Column(DateTime, nullable=True)
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    otp_hash = Column(String(64), nullable=True)
+    otp_expires = Column(DateTime, nullable=True)
+    otp_purpose = Column(String(16), nullable=True)
+
     # Relationships
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
 

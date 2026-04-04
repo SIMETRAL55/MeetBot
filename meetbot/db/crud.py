@@ -64,6 +64,44 @@ def get_user_by_id(db: Session, user_id: str) -> Optional[User]:
     return db.query(User).filter(User.id == user_id).first()
 
 
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """Get user by email address."""
+    return db.query(User).filter(User.email == email).first()
+
+
+def get_user_by_firebase_uid(db: Session, firebase_uid: str) -> Optional[User]:
+    """Get user by Firebase UID."""
+    return db.query(User).filter(User.firebase_uid == firebase_uid).first()
+
+
+def create_user_firebase(
+    db: Session,
+    username: str,
+    password_hash: str,
+    email: Optional[str] = None,
+    firebase_uid: Optional[str] = None,
+    email_verified: bool = False,
+    display_name: Optional[str] = None,
+    is_admin: bool = False,
+) -> User:
+    """Create a user that authenticates via Firebase (no local password)."""
+    user = User(
+        username=username,
+        password_hash=password_hash,
+        display_name=display_name or username,
+        is_admin=is_admin,
+        email=email,
+        firebase_uid=firebase_uid,
+        email_verified=email_verified,
+        failed_login_attempts=0,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info(f"Created Firebase user: {username}")
+    return user
+
+
 def update_user_last_login(db: Session, user: User) -> None:
     """Update user's last login timestamp."""
     user.last_login = datetime.now(timezone.utc)
