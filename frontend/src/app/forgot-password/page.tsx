@@ -1,9 +1,9 @@
 import { Mic } from "lucide-react";
-import LoginForm from "@/components/auth/LoginForm";
+import ForgotPasswordForm from "@/components/auth/ForgotPasswordForm";
 
-export const metadata = { title: "Sign In — MeetBot" };
+export const metadata = { title: "Forgot Password — MeetBot" };
 
-export default function LoginPage() {
+export default function ForgotPasswordPage() {
   return (
     <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-8">
@@ -13,7 +13,7 @@ export default function LoginPage() {
           </div>
           <span className="font-display text-lg font-semibold text-white">MeetBot</span>
         </div>
-        <LoginForm />
+        <ForgotPasswordForm />
       </div>
     </div>
   );

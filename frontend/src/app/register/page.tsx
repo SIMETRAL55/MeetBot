@@ -1,9 +1,9 @@
 import { Mic } from "lucide-react";
-import LoginForm from "@/components/auth/LoginForm";
+import RegisterForm from "@/components/auth/RegisterForm";
 
-export const metadata = { title: "Sign In — MeetBot" };
+export const metadata = { title: "Create Account — MeetBot" };
 
-export default function LoginPage() {
+export default function RegisterPage() {
   return (
     <div className="flex min-h-[calc(100vh-8rem)] items-center justify-center px-4">
       <div className="w-full max-w-sm space-y-8">
@@ -13,7 +13,7 @@ export default function LoginPage() {
           </div>
           <span className="font-display text-lg font-semibold text-white">MeetBot</span>
         </div>
-        <LoginForm />
+        <RegisterForm />
       </div>
     </div>
   );

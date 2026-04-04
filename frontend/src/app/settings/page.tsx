@@ -2,7 +2,9 @@
 
 import { useEffect, useState, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { api } from "../../lib/api";
+import { BackButton } from "../../components/BackButton";
 import { AppSetting, UserProfile } from "../../types";
 
 const GROUP_ORDER = [
@@ -23,6 +25,7 @@ interface SettingRowProps {
 }
 
 function SettingRow({ setting, onSave }: SettingRowProps) {
+  const t = useTranslations("Settings");
   const [localValue, setLocalValue] = useState(setting.value);
   const [saveState, setSaveState] = useState<SaveState>("idle");
   const [showPassword, setShowPassword] = useState(false);
@@ -66,7 +69,7 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
 
   const inputCls =
     "w-full border border-white/6 bg-[#080b14] text-slate-200 text-sm rounded-lg px-3 py-2 " +
-    "focus:outline-none focus:border-amber-500/40 focus:ring-1 focus:ring-amber-500/20 transition-colors";
+    "focus:outline-none focus:border-indigo-500/40 focus:ring-1 focus:ring-indigo-500/20 transition-colors";
 
   return (
     <div className="py-3 border-b border-white/4 last:border-0">
@@ -77,18 +80,18 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
               {setting.key}
             </span>
             {setting.restart_required && (
-              <span className="text-[9px] text-amber-400/70 ring-1 ring-amber-500/20 rounded px-1 py-0.5">
-                ⚠ restart required
+              <span className="text-[9px] text-indigo-400/70 ring-1 ring-indigo-500/20 rounded px-1 py-0.5">
+                ⚠ {t("restartRequired")}
               </span>
             )}
             {saveState === "saving" && (
-              <span className="text-[10px] text-slate-500 animate-pulse">saving…</span>
+              <span className="text-[10px] text-slate-500 animate-pulse">{t("saving")}</span>
             )}
             {saveState === "saved" && (
-              <span className="text-[10px] text-green-400">✓ saved</span>
+              <span className="text-[10px] text-green-400">{t("saved")}</span>
             )}
             {saveState === "error" && (
-              <span className="text-[10px] text-red-400">✗ error</span>
+              <span className="text-[10px] text-red-400">{t("error")}</span>
             )}
           </div>
 
@@ -99,7 +102,7 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
                 className={
                   "relative inline-flex h-5 w-9 items-center rounded-full transition-colors " +
                   (localValue === "true"
-                    ? "bg-amber-500/70"
+                    ? "bg-indigo-500/70"
                     : "bg-white/10")
                 }
               >
@@ -111,7 +114,7 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
                 />
               </button>
               <span className="text-sm text-slate-400">
-                {localValue === "true" ? "On" : "Off"}
+                {localValue === "true" ? t("on") : t("off")}
               </span>
             </div>
           ) : setting.type === "password" ? (
@@ -120,7 +123,7 @@ function SettingRow({ setting, onSave }: SettingRowProps) {
                 type={showPassword ? "text" : "password"}
                 value={localValue}
                 onChange={(e) => handleChange(e.target.value)}
-                placeholder="Leave blank to keep current value"
+                placeholder={t("passwordPlaceholder")}
                 className={inputCls + " pr-10"}
               />
               <button
@@ -173,6 +176,7 @@ function SectionLabel({ children }: { children: React.ReactNode }) {
 }
 
 export default function SettingsPage() {
+  const t = useTranslations("Settings");
   const router = useRouter();
   const [profile, setProfile] = useState<UserProfile | null>(null);
   const [settings, setSettings] = useState<AppSetting[]>([]);
@@ -223,12 +227,13 @@ export default function SettingsPage() {
 
   return (
     <div className="mx-auto max-w-4xl">
+      <BackButton />
       <h1 className="font-display text-3xl font-bold text-white mb-8">
-        Settings
+        {t("title")}
       </h1>
 
         {loading && (
-          <p className="text-slate-500 text-sm animate-pulse">Loading…</p>
+          <p className="text-slate-500 text-sm animate-pulse">{t("loading")}</p>
         )}
 
         {error && (
@@ -239,41 +244,41 @@ export default function SettingsPage() {
 
         {profile && (
           <section className="rounded-xl border border-white/6 bg-[#0d1120] p-6 mb-8">
-            <SectionLabel>Profile</SectionLabel>
+            <SectionLabel>{t("profile")}</SectionLabel>
             <div className="grid grid-cols-2 gap-4 text-sm">
               <div>
                 <span className="font-mono text-[9px] uppercase tracking-widest text-slate-500 block mb-0.5">
-                  Username
+                  {t("username")}
                 </span>
                 <span className="text-slate-200">{profile.username}</span>
               </div>
               <div>
                 <span className="font-mono text-[9px] uppercase tracking-widest text-slate-500 block mb-0.5">
-                  Display Name
+                  {t("displayName")}
                 </span>
                 <span className="text-slate-200">{profile.display_name}</span>
               </div>
               <div>
                 <span className="font-mono text-[9px] uppercase tracking-widest text-slate-500 block mb-0.5">
-                  Role
+                  {t("role")}
                 </span>
                 {profile.is_admin ? (
-                  <span className="text-[9px] bg-amber-500/10 text-amber-400 ring-1 ring-amber-500/20 rounded px-2 py-0.5">
-                    Admin
+                  <span className="text-[9px] bg-indigo-500/10 text-indigo-400 ring-1 ring-indigo-500/20 rounded px-2 py-0.5">
+                    {t("admin")}
                   </span>
                 ) : (
-                  <span className="text-slate-400">User</span>
+                  <span className="text-slate-400">{t("user")}</span>
                 )}
               </div>
               <div>
                 <span className="font-mono text-[9px] uppercase tracking-widest text-slate-500 block mb-0.5">
-                  Member Since
+                  {t("memberSince")}
                 </span>
                 <span className="text-slate-400">{formatDate(profile.created_at)}</span>
               </div>
               <div>
                 <span className="font-mono text-[9px] uppercase tracking-widest text-slate-500 block mb-0.5">
-                  Last Login
+                  {t("lastLogin")}
                 </span>
                 <span className="text-slate-400">{formatDate(profile.last_login)}</span>
               </div>
@@ -283,7 +288,7 @@ export default function SettingsPage() {
 
         {profile && !profile.is_admin && !loading && (
           <p className="text-slate-600 text-sm">
-            Settings are only editable by admins.
+            {t("adminOnly")}
           </p>
         )}
 
