@@ -399,9 +399,24 @@ class Settings(BaseSettings):
     PAGEINDEX_LLM_BACKEND: str = Field(
         "openrouter",
         env="PAGEINDEX_LLM_BACKEND",
-        description="LLM backend for PageIndex calls: 'openrouter' (recommended, "
-                    "free), 'ollama' or 'local' (Ollama offline fallback), "
-                    "'openai', or 'custom'.",
+        description="LLM backend for PageIndex calls: 'vertexai' (Vertex AI via gcloud ADC, "
+                    "recommended), 'google' (Gemini via Google AI Studio API key), "
+                    "'openrouter' (free models), 'ollama' or 'local' "
+                    "(Ollama offline fallback), 'openai', or 'custom'.",
+    )
+
+    VERTEXAI_PROJECT: str = Field(
+        "",
+        env="VERTEXAI_PROJECT",
+        description="Google Cloud project ID or number for Vertex AI. Required when "
+                    "PAGEINDEX_LLM_BACKEND='vertexai'.",
+    )
+
+    VERTEXAI_LOCATION: str = Field(
+        "us-central1",
+        env="VERTEXAI_LOCATION",
+        description="Google Cloud region for Vertex AI endpoints. "
+                    "Default: 'us-central1'.",
     )
 
     PAGEINDEX_LLM_BASE_URL: str = Field(
@@ -504,6 +519,63 @@ class Settings(BaseSettings):
         "60/minute",
         env="RATE_LIMIT_CHAT",
         description="Chat WebSocket connection rate limit per IP address.",
+    )
+
+    # =========================================================================
+    # Firebase Authentication (optional — enables social login)
+    # =========================================================================
+    FIREBASE_PROJECT_ID: str = Field(
+        "",
+        env="FIREBASE_PROJECT_ID",
+        description="Firebase project ID (e.g. 'my-meetbot-app'). Required for Firebase auth.",
+    )
+
+    FIREBASE_WEB_API_KEY: str = Field(
+        "",
+        env="FIREBASE_WEB_API_KEY",
+        description="Firebase Web API Key from the Firebase console (Browser key).",
+    )
+
+    # =========================================================================
+    # SMTP Email Configuration (for password reset emails)
+    # =========================================================================
+    SMTP_HOST: str = Field(
+        "",
+        env="SMTP_HOST",
+        description="SMTP server hostname (e.g. 'smtp.gmail.com').",
+    )
+
+    SMTP_PORT: int = Field(
+        587,
+        env="SMTP_PORT",
+        description="SMTP server port. 587 for STARTTLS (recommended), 465 for SSL.",
+    )
+
+    SMTP_USER: str = Field(
+        "",
+        env="SMTP_USER",
+        description="SMTP login username (usually the sender email address).",
+    )
+
+    SMTP_PASSWORD: str = Field(
+        "",
+        env="SMTP_PASSWORD",
+        description="SMTP login password or app-specific password.",
+    )
+
+    SMTP_FROM: str = Field(
+        "noreply@meetbot.app",
+        env="SMTP_FROM",
+        description="From address used in outgoing emails.",
+    )
+
+    # =========================================================================
+    # Google Analytics 4
+    # =========================================================================
+    GA4_MEASUREMENT_ID: str = Field(
+        "",
+        env="GA4_MEASUREMENT_ID",
+        description="GA4 Measurement ID (e.g. 'G-XXXXXXXXXX'). Leave empty to disable analytics.",
     )
 
     # =========================================================================
@@ -647,14 +719,26 @@ class Settings(BaseSettings):
 
     def get_pageindex_base_url(self) -> str:
         """Resolve the LLM base URL based on the configured backend."""
+        if self.PAGEINDEX_LLM_BASE_URL:
+            return self.PAGEINDEX_LLM_BASE_URL
+        if self.PAGEINDEX_LLM_BACKEND == "vertexai":
+            loc = self.VERTEXAI_LOCATION or "us-central1"
+            proj = self.VERTEXAI_PROJECT
+            if not proj:
+                raise ValueError(
+                    "VERTEXAI_PROJECT must be set when PAGEINDEX_LLM_BACKEND='vertexai'."
+                )
+            return (
+                f"https://{loc}-aiplatform.googleapis.com/v1/projects/{proj}"
+                f"/locations/{loc}/endpoints/openapi"
+            )
         _backend_urls = {
+            "google": "https://generativelanguage.googleapis.com/v1beta/openai/",
             "openrouter": "https://openrouter.ai/api/v1",
             "openai": "https://api.openai.com/v1",
             "local": "http://localhost:11434/v1",
             "ollama": "http://localhost:11434/v1",
         }
-        if self.PAGEINDEX_LLM_BASE_URL:
-            return self.PAGEINDEX_LLM_BASE_URL
         return _backend_urls.get(self.PAGEINDEX_LLM_BACKEND, "https://openrouter.ai/api/v1")
 
     def get_pageindex_output_dir(self) -> Path:
