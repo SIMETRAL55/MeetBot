@@ -87,6 +87,25 @@ class RegisterRequest(BaseModel):
     username: str
     password: str
     display_name: Optional[str] = None
+    email: str
+
+class FirebaseLoginRequest(BaseModel):
+    id_token: str
+
+class ForgotPasswordRequest(BaseModel):
+    email: str
+
+class ResetPasswordRequest(BaseModel):
+    reset_token: str
+    new_password: str
+
+class VerifyOtpRequest(BaseModel):
+    email: str
+    otp: str
+
+class ResendOtpRequest(BaseModel):
+    email: str
+    purpose: str  # "register" | "reset"
 
 
 # ── Health Check ──────────────────────────────────────────────────────────────
@@ -144,44 +163,43 @@ async def api_health() -> JSONResponse:
 
 async def api_auth_login(body: LoginRequest) -> JSONResponse:
     """Authenticate user and return user info with access token."""
-    from ..web.auth import authenticate_user
+    from ..web.auth import verify_password, check_account_lockout, record_failed_login, record_successful_login
     from ..web.auth_middleware import create_access_token
-
-    user = authenticate_user(body.username, body.password)
-    if user is None:
-        raise HTTPException(status_code=401, detail="Invalid username or password")
-
-    token = create_access_token(user.id, user.username)
-    return JSONResponse({
-        "user_id": user.id,
-        "username": user.username,
-        "display_name": user.display_name or user.username,
-        "is_admin": user.is_admin,
-        "access_token": token,
-        "token_type": "bearer",
-    })
-
-async def api_auth_register(body: RegisterRequest) -> JSONResponse:
-    """Register a new user account and return access token."""
-    from ..web.auth import hash_password
-    from ..web.auth_middleware import create_access_token
-    from ..db.crud import create_user, get_user_by_username
-
-    # Validate password strength
-    if len(body.password) < 8:
-        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+    from ..db.crud import get_user_by_username, get_user_by_email
 
     SessionLocal = get_session()
     db = SessionLocal()
     try:
-        existing = get_user_by_username(db, body.username)
-        if existing:
-            raise HTTPException(status_code=409, detail="Username already exists")
-        hashed = hash_password(body.password)
-        user = create_user(
-            db, body.username, hashed,
-            display_name=body.display_name,
-        )
+        # Support login by username OR email
+        user = get_user_by_username(db, body.username)
+        if user is None:
+            user = get_user_by_email(db, body.username)
+
+        if user is None:
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+
+        # Block unverified email accounts (local auth only — Firebase users skip this)
+        if user.email and not user.email_verified and not user.firebase_uid:
+            return JSONResponse(
+                {"detail": "email_not_verified", "email": user.email},
+                status_code=403,
+            )
+
+        # Check account lockout before password verification
+        locked_until = check_account_lockout(user)
+        if locked_until is not None:
+            raise HTTPException(
+                status_code=423,
+                detail=f"Account locked until {locked_until.isoformat()}. Too many failed login attempts.",
+            )
+
+        if not verify_password(body.password, user.password_hash):
+            record_failed_login(db, user)
+            raise HTTPException(status_code=401, detail="Invalid username or password")
+
+        record_successful_login(db, user)
+        db.refresh(user)
+        db.expunge(user)
         token = create_access_token(user.id, user.username)
         return JSONResponse({
             "user_id": user.id,
@@ -190,9 +208,237 @@ async def api_auth_register(body: RegisterRequest) -> JSONResponse:
             "is_admin": user.is_admin,
             "access_token": token,
             "token_type": "bearer",
-        }, status_code=201)
+        })
     finally:
         db.close()
+
+async def api_auth_register(body: RegisterRequest) -> JSONResponse:
+    """Register a new user account and send OTP verification email."""
+    import re
+    from ..web.auth import hash_password, generate_otp, store_otp, send_otp_email
+    from ..db.crud import create_user, get_user_by_username, get_user_by_email
+
+    if len(body.password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", body.email):
+        raise HTTPException(status_code=422, detail="Invalid email address")
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        if get_user_by_username(db, body.username):
+            raise HTTPException(status_code=409, detail="Username already exists")
+        if get_user_by_email(db, body.email):
+            raise HTTPException(status_code=409, detail="Email already registered")
+
+        raw_otp, otp_hash = generate_otp()
+
+        # Send email BEFORE creating user — if SMTP fails, no orphan account is created
+        try:
+            send_otp_email(body.email, raw_otp, "register")
+        except ValueError as exc:
+            raise HTTPException(status_code=503, detail=str(exc))
+        except Exception as exc:
+            logger.error("register: OTP email failed: %s", exc)
+            raise HTTPException(status_code=503, detail="Failed to send verification email")
+
+        hashed = hash_password(body.password)
+        user = create_user(db, body.username, hashed, display_name=body.display_name)
+        user.email = body.email
+        user.email_verified = False
+        db.add(user)
+        db.commit()
+
+        store_otp(db, user, otp_hash, "register")
+
+        return JSONResponse({"message": "otp_sent", "email": body.email}, status_code=201)
+    finally:
+        db.close()
+
+
+@limiter.limit("20/minute")
+async def api_firebase_login(request: "Request", body: FirebaseLoginRequest) -> JSONResponse:
+    """Authenticate via Firebase ID token and return MeetBot access token."""
+    from ..web.auth import verify_firebase_token, get_or_create_firebase_user
+    from ..web.auth_middleware import create_access_token
+
+    claims = verify_firebase_token(body.id_token)
+    if claims is None:
+        raise HTTPException(status_code=401, detail="Invalid Firebase token")
+
+    if not claims.get("email_verified", False):
+        raise HTTPException(status_code=403, detail="EMAIL_NOT_VERIFIED")
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_or_create_firebase_user(db, claims)
+        if user is None:
+            raise HTTPException(status_code=500, detail="Failed to create user from Firebase token")
+
+        token = create_access_token(user.id, user.username)
+        return JSONResponse({
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.username,
+            "is_admin": user.is_admin,
+            "access_token": token,
+            "token_type": "bearer",
+        })
+    finally:
+        db.close()
+
+
+@limiter.limit("5/hour")
+async def api_forgot_password(request: "Request", body: ForgotPasswordRequest) -> JSONResponse:
+    """Initiate password reset via OTP — always returns 200 to prevent email enumeration."""
+    import re
+    from ..web.auth import generate_otp, store_otp, send_otp_email
+    from ..db.crud import get_user_by_email
+
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", body.email):
+        return JSONResponse({"message": "otp_sent"})
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_email(db, body.email)
+        if user is not None:
+            raw_otp, otp_hash = generate_otp()
+            store_otp(db, user, otp_hash, "reset")
+            try:
+                send_otp_email(body.email, raw_otp, "reset")
+            except Exception:
+                logger.exception("forgot_password: OTP email failed (suppressed)")
+    except Exception:
+        logger.exception("forgot_password: unexpected error (suppressed)")
+    finally:
+        db.close()
+
+    return JSONResponse({"message": "otp_sent"})
+
+
+@limiter.limit("10/hour")
+async def api_reset_password(request: "Request", body: ResetPasswordRequest) -> JSONResponse:
+    """Complete password reset using a short-lived reset JWT."""
+    from ..web.auth import hash_password
+    from ..web.auth_middleware import verify_reset_token
+    from ..db.crud import get_user_by_email
+
+    if len(body.new_password) < 8:
+        raise HTTPException(status_code=422, detail="Password must be at least 8 characters")
+
+    claims = verify_reset_token(body.reset_token)
+    if claims is None:
+        raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+    email = claims["sub"]
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_email(db, email)
+        if user is None:
+            raise HTTPException(status_code=400, detail="Invalid or expired reset token")
+
+        user.password_hash = hash_password(body.new_password)
+        user.failed_login_attempts = 0
+        user.locked_until = None
+        db.add(user)
+        db.commit()
+
+        return JSONResponse({"message": "password_reset_success"})
+    finally:
+        db.close()
+
+
+async def api_verify_register_otp(body: VerifyOtpRequest) -> JSONResponse:
+    """Verify a registration OTP and issue a JWT on success."""
+    from ..web.auth import verify_otp, clear_otp
+    from ..web.auth_middleware import create_access_token
+    from ..db.crud import get_user_by_email
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_email(db, body.email)
+        if user is None or not verify_otp(user, body.otp, "register"):
+            raise HTTPException(status_code=400, detail="invalid_or_expired_otp")
+
+        user.email_verified = True
+        db.add(user)
+        db.commit()
+        db.refresh(user)
+        clear_otp(db, user)
+
+        token = create_access_token(user.id, user.username)
+        return JSONResponse({
+            "user_id": user.id,
+            "username": user.username,
+            "display_name": user.display_name or user.username,
+            "is_admin": user.is_admin,
+            "access_token": token,
+            "token_type": "bearer",
+        })
+    finally:
+        db.close()
+
+
+async def api_verify_reset_otp(body: VerifyOtpRequest) -> JSONResponse:
+    """Verify a password-reset OTP and return a short-lived reset JWT."""
+    from ..web.auth import verify_otp, clear_otp
+    from ..web.auth_middleware import create_reset_token
+    from ..db.crud import get_user_by_email
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_email(db, body.email)
+        if user is None or not verify_otp(user, body.otp, "reset"):
+            raise HTTPException(status_code=400, detail="invalid_or_expired_otp")
+
+        clear_otp(db, user)
+        return JSONResponse({"reset_token": create_reset_token(body.email)})
+    finally:
+        db.close()
+
+
+@limiter.limit("5/hour")
+async def api_resend_otp(request: "Request", body: ResendOtpRequest) -> JSONResponse:
+    """Resend an OTP — rate-limited, 60s per-user cooldown."""
+    from datetime import datetime, timezone, timedelta
+    from ..web.auth import generate_otp, store_otp, send_otp_email
+    from ..db.crud import get_user_by_email
+
+    if body.purpose not in ("register", "reset"):
+        raise HTTPException(status_code=422, detail="purpose must be 'register' or 'reset'")
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        user = get_user_by_email(db, body.email)
+        if user is not None:
+            # Enforce 60s cooldown: if expires > now + 14 min, OTP was just issued
+            if user.otp_expires:
+                expires = user.otp_expires
+                if expires.tzinfo is None:
+                    expires = expires.replace(tzinfo=timezone.utc)
+                if expires > datetime.now(timezone.utc) + timedelta(minutes=14):
+                    raise HTTPException(
+                        status_code=429,
+                        detail="Please wait before requesting another code",
+                    )
+            raw_otp, otp_hash = generate_otp()
+            store_otp(db, user, otp_hash, body.purpose)
+            try:
+                send_otp_email(body.email, raw_otp, body.purpose)
+            except Exception:
+                logger.exception("resend_otp: email failed (suppressed)")
+    finally:
+        db.close()
+
+    return JSONResponse({"message": "otp_sent"})
 
 
 # ── Handlers ──────────────────────────────────────────────────────────────────
@@ -1555,3 +1801,48 @@ async def api_get_me(request: Request) -> JSONResponse:
         })
     finally:
         db.close()
+
+
+async def api_rename_speaker(request: Request, job_id: str) -> JSONResponse:
+    """POST /api/jobs/{job_id}/rename-speaker
+    Body: {"old_name": "SPEAKER_00", "new_name": "Alice"}
+
+    Bulk-renames all segments matching old_name in the given job and flushes
+    updated segments to the on-disk JSON transcript.
+
+    NOTE: Does NOT auto-trigger reindex — the user can use the existing
+    "Reindex" button after renaming. This avoids blocking the response on
+    a potentially long reindex, and allows the user to rename multiple
+    speakers before reindexing once.
+    """
+    from .auth_middleware import get_optional_user
+    from ..db import crud
+    from ..db.database import get_session
+
+    token_user = get_optional_user(request)
+    if not token_user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    try:
+        body = await request.json()
+    except Exception:
+        return JSONResponse({"error": "Invalid JSON body"}, status_code=422)
+
+    old_name = (body.get("old_name") or "").strip()
+    new_name = (body.get("new_name") or "").strip()
+    if not old_name or not new_name:
+        return JSONResponse({"error": "old_name and new_name are required"}, status_code=422)
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        job = crud.get_job(db, job_id)
+        if not job or job.user_id != token_user["sub"]:
+            return JSONResponse({"error": "Not found"}, status_code=404)
+
+        count = crud.bulk_update_speaker_name(db, job_id, old_name, new_name)
+        crud.flush_segments_to_json(db, job_id)
+    finally:
+        db.close()
+
+    return JSONResponse({"renamed": count})
