@@ -1,0 +1,170 @@
+{
+  "Header": {
+    "nav": {
+      "dashboard": "ダッシュボード",
+      "job": "ジョブ",
+      "chat": "チャット",
+      "settings": "設定"
+    },
+    "user": {
+      "signIn": "サインイン",
+      "signOut": "サインアウト"
+    }
+  },
+  "BackButton": {
+    "label": "戻る"
+  },
+  "Dashboard": {
+    "title": "ダッシュボード",
+    "subtitle": "文字起こしとAIジョブを管理します。",
+    "recentJobs": "最近のジョブ",
+    "empty": {
+      "title": "文字起こしがまだありません",
+      "hint": "上部から音声ファイルをアップロードして開始してください。"
+    }
+  },
+  "Settings": {
+    "title": "設定",
+    "loading": "読み込み中…",
+    "profile": "プロフィール",
+    "username": "ユーザー名",
+    "displayName": "表示名",
+    "role": "役割",
+    "admin": "管理者",
+    "user": "ユーザー",
+    "memberSince": "登録日",
+    "lastLogin": "最終ログイン",
+    "adminOnly": "設定は管理者のみ編集できます。",
+    "saving": "保存中…",
+    "saved": "✓ 保存済み",
+    "error": "✗ エラー",
+    "restartRequired": "再起動が必要",
+    "on": "オン",
+    "off": "オフ",
+    "passwordPlaceholder": "空白のままにすると現在の値を保持します"
+  },
+  "AudioPlayer": {
+    "playback": "音声再生",
+    "play": "再生",
+    "pause": "一時停止",
+    "volume": "音量",
+    "loadError": "音声ファイルの読み込みに失敗しました"
+  },
+  "TranscriptEditor": {
+    "title": "インタラクティブ文字起こし",
+    "segments": "セグメント",
+    "edit": "編集",
+    "save": "保存",
+    "cancel": "キャンセル",
+    "saving": "保存中…",
+    "speakerPlaceholder": "話者名",
+    "empty": "このジョブの文字起こしデータがありません。",
+    "emptyHint": "処理が完了するまでお待ちいただくか、ログを確認してください。"
+  },
+  "JobPage": {
+    "openChat": "チャットを開く",
+    "processing": "処理中…",
+    "processingHint": "処理が完了すると文字起こしが表示されます。",
+    "download": {
+      "label": "ダウンロード",
+      "aligned": "整合文字起こし",
+      "whisper": "Whisper生出力",
+      "diarization": "話者分離"
+    },
+    "sections": {
+      "speakers": "話者",
+      "vectorIndex": "ベクトルインデックス",
+      "pageIndex": "ページインデックス"
+    },
+    "vectorIndex": {
+      "desc": "セグメントを編集した後、ベクトルインデックスを再構築します。",
+      "rebuild": "インデックスを再構築",
+      "reindexing": "インデックス再構築中…",
+      "starting": "開始中…",
+      "cancelling": "キャンセル中…",
+      "cancel": "キャンセル"
+    },
+    "pageIndex": {
+      "desc": "この文字起こし用のLLMベースのツリーインデックスを構築します。",
+      "failedDesc": "前回のビルドが失敗しました。もう一度お試しください。",
+      "cancelledDesc": "前回のビルドがキャンセルされました。もう一度お試しください。",
+      "selectDesc": "チャットでページインデックスを選択してツリー検索を使用します。",
+      "build": "ページインデックスを構築",
+      "buildingTree": "ツリーを構築中…",
+      "stopping": "停止中…",
+      "stop": "停止",
+      "rebuild": "再構築",
+      "starting": "開始中…",
+      "treeTitle": "ページインデックスツリー",
+      "status": {
+        "ready": "準備完了",
+        "building": "構築中",
+        "failed": "失敗",
+        "cancelled": "キャンセル済み"
+      }
+    },
+    "rename": {
+      "placeholder": "新しい話者名",
+      "confirm": "確認",
+      "cancel": "キャンセル"
+    }
+  },
+  "ChatPage": {
+    "emptyTitle": "文字起こしについて質問する",
+    "emptyDesc": "要点をまとめたり、アクションアイテムを抽出したり、議論した特定のトピックについて質問できます。",
+    "placeholder": "この文字起こしについて何でも聞いてください…（Shift+Enterで改行）",
+    "placeholderWaiting": "応答を待っています…",
+    "stopGeneration": "生成を停止",
+    "disclaimer": "MeetBotは誤りを犯す場合があります — 重要な情報を確認してください。",
+    "session": "セッション",
+    "retrieval": "検索方法",
+    "llmBackend": "LLMバックエンド",
+    "pageindexNotBuilt": "ページインデックス未構築",
+    "pageindexBuildHint": "最初にジョブ詳細ページでページインデックスを構築してください",
+    "pageindexUseTree": "LLMツリー検索を使用",
+    "viewJobDetails": "ジョブ詳細を表示",
+    "local": "ローカル",
+    "hfApi": "HF API",
+    "vector": "ベクトル",
+    "pageindex": "ページインデックス",
+    "retrievedContext": "取得コンテキスト",
+    "segment": "セグメント",
+    "segments": "セグメント",
+    "section": "セクション",
+    "sections": "セクション",
+    "retrievedVia": "{level}レベル検索で取得",
+    "streaming": "ストリーミング中",
+    "loading": "読み込み中",
+    "ready": "準備完了"
+  },
+  "ProgressTimeline": {
+    "pipelineProgress": "パイプラインの進捗",
+    "nextSteps": "次のステップ",
+    "aiAssistant": "AIアシスタントに聞く",
+    "restartPipeline": "パイプラインを再起動",
+    "completedDesc": "処理が正常に完了しました。文字起こしを表示したり、質問できます。",
+    "failedDesc": "ジョブが失敗しました。ログを確認するか、再起動してください。",
+    "processingDesc": "パイプラインはバックグラウンドで実行されるAIモデルに依存しています。処理が完了するまでお待ちください。",
+    "executionLogs": "実行ログ",
+    "noLogs": "ログはありません。",
+    "waitingOutput": "出力を待っています...",
+    "back": "ジョブ一覧に戻る",
+    "stop": "停止",
+    "restart": "再起動",
+    "cancel": "キャンセル",
+    "cancelling": "キャンセル中…",
+    "overall": "全体",
+    "stage": "ステージ",
+    "stages": {
+      "queued": "キュー待ち",
+      "transcription": "文字起こし",
+      "diarization": "話者分離",
+      "alignment": "整列",
+      "indexing": "インデックス"
+    }
+  },
+  "LangToggle": {
+    "toJa": "日本語",
+    "toEn": "English"
+  }
+}

@@ -1,0 +1,170 @@
+{
+  "Header": {
+    "nav": {
+      "dashboard": "Dashboard",
+      "job": "Job",
+      "chat": "Chat",
+      "settings": "Settings"
+    },
+    "user": {
+      "signIn": "Sign In",
+      "signOut": "Sign out"
+    }
+  },
+  "BackButton": {
+    "label": "Back"
+  },
+  "Dashboard": {
+    "title": "Dashboard",
+    "subtitle": "Manage your transcriptions and AI jobs.",
+    "recentJobs": "Recent Jobs",
+    "empty": {
+      "title": "No transcriptions yet",
+      "hint": "Upload an audio file above to get started."
+    }
+  },
+  "Settings": {
+    "title": "Settings",
+    "loading": "Loading…",
+    "profile": "Profile",
+    "username": "Username",
+    "displayName": "Display Name",
+    "role": "Role",
+    "admin": "Admin",
+    "user": "User",
+    "memberSince": "Member Since",
+    "lastLogin": "Last Login",
+    "adminOnly": "Settings are only editable by admins.",
+    "saving": "saving…",
+    "saved": "✓ saved",
+    "error": "✗ error",
+    "restartRequired": "restart required",
+    "on": "On",
+    "off": "Off",
+    "passwordPlaceholder": "Leave blank to keep current value"
+  },
+  "AudioPlayer": {
+    "playback": "Audio Playback",
+    "play": "Play",
+    "pause": "Pause",
+    "volume": "Volume",
+    "loadError": "Failed to load audio file"
+  },
+  "TranscriptEditor": {
+    "title": "Interactive Transcript",
+    "segments": "segments",
+    "edit": "Edit",
+    "save": "Save",
+    "cancel": "Cancel",
+    "saving": "Saving…",
+    "speakerPlaceholder": "Speaker Name",
+    "empty": "No transcript data available for this job.",
+    "emptyHint": "Wait for processing to complete or check the logs."
+  },
+  "JobPage": {
+    "openChat": "Open Chat",
+    "processing": "Processing…",
+    "processingHint": "Transcript will appear once complete.",
+    "download": {
+      "label": "Download",
+      "aligned": "Aligned Transcript",
+      "whisper": "Raw Whisper Output",
+      "diarization": "Speaker Diarization"
+    },
+    "sections": {
+      "speakers": "Speakers",
+      "vectorIndex": "Vector Index",
+      "pageIndex": "PageIndex"
+    },
+    "vectorIndex": {
+      "desc": "Rebuild vector index after editing segments.",
+      "rebuild": "Rebuild Index",
+      "reindexing": "Reindexing…",
+      "starting": "Starting…",
+      "cancelling": "Cancelling…",
+      "cancel": "Cancel"
+    },
+    "pageIndex": {
+      "desc": "Build an LLM-based tree index for this transcript.",
+      "failedDesc": "Previous build failed. Try again.",
+      "cancelledDesc": "Previous build cancelled. Try again.",
+      "selectDesc": "Select PageIndex in chat to use tree search.",
+      "build": "Build PageIndex",
+      "buildingTree": "Building tree…",
+      "stopping": "Stopping…",
+      "stop": "Stop",
+      "rebuild": "Rebuild",
+      "starting": "Starting…",
+      "treeTitle": "PageIndex Tree",
+      "status": {
+        "ready": "ready",
+        "building": "building",
+        "failed": "failed",
+        "cancelled": "cancelled"
+      }
+    },
+    "rename": {
+      "placeholder": "New speaker name",
+      "confirm": "Confirm",
+      "cancel": "Cancel"
+    }
+  },
+  "ChatPage": {
+    "emptyTitle": "Ask about your transcript",
+    "emptyDesc": "Summarize key points, extract action items, or ask about specific topics discussed.",
+    "placeholder": "Ask anything about this transcript… (Shift+Enter for new line)",
+    "placeholderWaiting": "Waiting for response…",
+    "stopGeneration": "Stop generation",
+    "disclaimer": "MeetBot may make mistakes — verify important information.",
+    "session": "Session",
+    "retrieval": "Retrieval",
+    "llmBackend": "LLM Backend",
+    "pageindexNotBuilt": "PageIndex not built",
+    "pageindexBuildHint": "Build PageIndex on the job detail page first",
+    "pageindexUseTree": "Use LLM tree search",
+    "viewJobDetails": "View job details",
+    "local": "Local",
+    "hfApi": "HF API",
+    "vector": "Vector",
+    "pageindex": "PageIndex",
+    "retrievedContext": "Retrieved context",
+    "segment": "segment",
+    "segments": "segments",
+    "section": "section",
+    "sections": "sections",
+    "retrievedVia": "retrieved via {level}-level search",
+    "streaming": "streaming",
+    "loading": "loading",
+    "ready": "ready"
+  },
+  "ProgressTimeline": {
+    "pipelineProgress": "Pipeline Progress",
+    "nextSteps": "Next Steps",
+    "aiAssistant": "Ask AI Assistant",
+    "restartPipeline": "Restart Pipeline",
+    "completedDesc": "Processing finished successfully. You can now view the transcript or ask questions.",
+    "failedDesc": "Job failed to complete. Check the logs below or restart to try again.",
+    "processingDesc": "The pipeline relies on AI models running in the background. Please wait while processing completes.",
+    "executionLogs": "Execution Logs",
+    "noLogs": "No logs available.",
+    "waitingOutput": "waiting for output...",
+    "back": "Back to jobs",
+    "stop": "Stop",
+    "restart": "Restart",
+    "cancel": "Cancel",
+    "cancelling": "Cancelling…",
+    "overall": "Overall",
+    "stage": "Stage",
+    "stages": {
+      "queued": "Queued",
+      "transcription": "Transcription",
+      "diarization": "Speaker Diarization",
+      "alignment": "Alignment",
+      "indexing": "RAG Indexing"
+    }
+  },
+  "LangToggle": {
+    "toJa": "日本語",
+    "toEn": "English"
+  }
+}
