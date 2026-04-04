@@ -24,6 +24,9 @@ logger = logging.getLogger(__name__)
 # Token lifetime: 24 hours
 TOKEN_LIFETIME_SECONDS = 86400
 
+# Reset token lifetime: 10 minutes
+RESET_TOKEN_LIFETIME_SECONDS = 600
+
 
 def _b64encode(data: bytes) -> str:
     return urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
@@ -109,6 +112,7 @@ def verify_token(token: str) -> Optional[dict]:
 
         # Check expiration
         if payload.get("exp", 0) < time.time():
+            logger.debug("JWT rejected: token expired for sub=%s", payload.get("sub"))
             return None
 
         return payload
@@ -154,6 +158,31 @@ async def get_current_user(request: Request) -> dict:
             headers={"WWW-Authenticate": "Bearer"},
         )
 
+    return payload
+
+
+def create_reset_token(email: str) -> str:
+    """Create a short-lived password-reset JWT signed with WEB_SECRET_KEY."""
+    secret = _get_secret()
+    header = _b64encode(json.dumps({"alg": "HS256", "typ": "JWT"}).encode())
+    payload_dict = {
+        "sub": email,
+        "purpose": "password_reset",
+        "iat": int(time.time()),
+        "exp": int(time.time()) + RESET_TOKEN_LIFETIME_SECONDS,
+    }
+    payload = _b64encode(json.dumps(payload_dict).encode())
+    sig = _b64encode(
+        hmac.new(secret.encode(), f"{header}.{payload}".encode(), hashlib.sha256).digest()
+    )
+    return f"{header}.{payload}.{sig}"
+
+
+def verify_reset_token(token: str) -> Optional[dict]:
+    """Verify a reset token; returns payload only if purpose=='password_reset'."""
+    payload = verify_token(token)
+    if payload is None or payload.get("purpose") != "password_reset":
+        return None
     return payload
 
 

@@ -2,43 +2,110 @@
 
 import { useState, useRef, useEffect } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { Send, User, Bot, Loader2, ArrowLeft, Settings2, FileText, ChevronDown, ChevronRight, SlidersHorizontal } from "lucide-react";
+import {
+  Send,
+  User,
+  Bot,
+  Loader2,
+  FileText,
+  ChevronDown,
+  ChevronRight,
+  Network,
+  Settings2,
+  ExternalLink,
+} from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
+import { useTranslations } from "next-intl";
 import { useChatWS } from "@/lib/hooks/useChatWS";
-import { Card } from "@/components/ui/card";
 import { ChatSource, Job } from "@/types";
 import { api } from "@/lib/api";
+import { BackButton } from "@/components/BackButton";
 
-function SourceAccordion({ sources }: { sources: ChatSource[] }) {
+function fmtTime(secs: number): string {
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = Math.floor(secs % 60);
+  if (h > 0) return `${h}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  return `${m}:${String(s).padStart(2, "0")}`;
+}
+
+/* ── Source accordion ────────────────────────────────────────────────────── */
+function SourceAccordion({
+  sources,
+  retrievalMethod = "vector",
+}: {
+  sources: ChatSource[];
+  retrievalMethod?: "vector" | "pageindex";
+}) {
+  const t = useTranslations("ChatPage");
   const [isOpen, setIsOpen] = useState(false);
-
   if (!sources || sources.length === 0) return null;
 
+  const isPageIndex = retrievalMethod === "pageindex";
+  const unit = isPageIndex
+    ? (sources.length !== 1 ? t("sections") : t("section"))
+    : (sources.length !== 1 ? t("segments") : t("segment"));
+  const label = `${sources.length} ${unit}`;
+
   return (
-    <div className="mt-4 rounded-md border border-slate-700 bg-slate-800/50">
-      <button 
+    <div className="mt-3 rounded-lg border border-white/5 bg-white/2">
+      <button
         onClick={() => setIsOpen(!isOpen)}
-        className="flex w-full items-center justify-between px-3 py-2 text-xs font-medium text-slate-300 hover:text-white"
+        className="flex w-full items-center gap-2 px-3 py-2 text-left text-[11px] text-slate-500 transition-colors hover:text-slate-400"
       >
-        <span className="flex items-center gap-2">
-          <FileText className="h-3.5 w-3.5 text-teal-400" />
-          Retrieved Context ({sources.length} items)
+        <FileText className={`h-3 w-3 shrink-0 ${isPageIndex ? "text-indigo-400/60" : "text-slate-500/60"}`} />
+        <span className="flex-1">{t("retrievedContext")} — {label}</span>
+        <span
+          className={`font-mono-editorial rounded px-1.5 py-0.5 text-[9px] font-semibold ring-1 ${
+            isPageIndex
+              ? "bg-indigo-500/10 text-indigo-400/80 ring-indigo-500/20"
+              : "bg-slate-500/10 text-slate-400/80 ring-slate-500/20"
+          }`}
+        >
+          {isPageIndex ? "pageindex" : "vector"}
         </span>
-        {isOpen ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
+        {isOpen ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
       </button>
-      
+
       {isOpen && (
-        <div className="border-t border-slate-700 px-3 py-2">
+        <div className="border-t border-white/5 px-3 py-2 space-y-3">
           {sources.map((src, i) => (
-            <div key={i} className="mb-3 last:mb-0">
-              <div className="mb-1 flex items-center gap-2 text-[10px] font-semibold tracking-wider text-slate-400">
-                <span className="rounded bg-slate-900 px-1 py-0.5" title="Distance (lower is better)">Dist: {src.distance?.toFixed(3) ?? "N/A"}</span>
-                <span className="text-violet-400">{src.speaker}</span>
+            <div key={i}>
+              <div className="mb-1 flex flex-wrap items-center gap-1.5">
+                {isPageIndex && src.node_title ? (
+                  <span className="font-mono-editorial rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-400/80 ring-1 ring-indigo-500/20">
+                    {src.node_title}
+                  </span>
+                ) : (
+                  <span
+                    className="font-mono-editorial text-[10px] text-slate-600"
+                    title="Distance (lower is better)"
+                  >
+                    dist:{src.distance?.toFixed(3) ?? "N/A"}
+                  </span>
+                )}
+                {src.node_id && (
+                  <span className="font-mono-editorial text-[10px] text-slate-700">
+                    {src.node_id}
+                  </span>
+                )}
+                <span className="font-mono-editorial text-[10px] text-slate-400/70">
+                  {src.speaker}
+                </span>
+                {typeof src.start === "number" && (
+                  <span className="font-mono-editorial text-[10px] text-slate-700">
+                    {fmtTime(src.start)}–{fmtTime(src.end)}
+                  </span>
+                )}
               </div>
-              <p className="border-l-2 border-teal-500/50 pl-2 text-xs leading-relaxed text-slate-300">
-                &quot;{src.text}&quot;
+              <p
+                className={`border-l-2 pl-2 text-[11px] leading-relaxed text-slate-400 ${
+                  isPageIndex ? "border-indigo-500/30" : "border-slate-500/20"
+                }`}
+              >
+                &ldquo;{src.text}&rdquo;
               </p>
             </div>
           ))}
@@ -48,65 +115,90 @@ function SourceAccordion({ sources }: { sources: ChatSource[] }) {
   );
 }
 
-type RetrievalLevel = "chunk" | "segment" | "document";
+/* ── Retrieval pill toggle ────────────────────────────────────────────────── */
+function PillToggle({
+  value,
+  options,
+  onChange,
+}: {
+  value: string;
+  options: { label: string; value: string; disabled?: boolean; title?: string }[];
+  onChange: (v: string) => void;
+}) {
+  return (
+    <div className="flex rounded-lg border border-white/6 bg-[#0b0e18] p-0.5">
+      {options.map((opt) => (
+        <button
+          key={opt.value}
+          onClick={() => !opt.disabled && onChange(opt.value)}
+          disabled={opt.disabled}
+          title={opt.title}
+          className={`font-mono-editorial flex-1 rounded-md px-3 py-1.5 text-[11px] font-semibold transition-all ${
+            value === opt.value
+              ? "bg-indigo-500/15 text-indigo-400 shadow-sm ring-1 ring-indigo-500/25"
+              : opt.disabled
+              ? "cursor-not-allowed text-slate-700"
+              : "text-slate-500 hover:text-slate-300"
+          }`}
+        >
+          {opt.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/* ── Main page ───────────────────────────────────────────────────────────── */
+type RetrievalMethod = "vector" | "pageindex";
 
 export default function ChatPage() {
+  const t = useTranslations("ChatPage");
   const { id } = useParams() as { id: string };
   const router = useRouter();
   const [input, setInput] = useState("");
   const [llmMode, setLlmMode] = useState<"local" | "hf">("local");
-  const [retrievalLevel, setRetrievalLevel] = useState<RetrievalLevel>("chunk");
-  const [segmentCount, setSegmentCount] = useState(5);
-  const [showSettings, setShowSettings] = useState(false);
-  const [jobName, setJobName] = useState<string>("");
-  
+  const [retrievalMethod, setRetrievalMethod] = useState<RetrievalMethod>("vector");
+  const [job, setJob] = useState<Job | null>(null);
+  const [pageindexAvailable, setPageindexAvailable] = useState(false);
+
   const { messages, loading, fetchingHistory, error, sendMessage, loadHistory, abortQuery } = useChatWS(id);
   const scrollRef = useRef<HTMLDivElement>(null);
 
-  // Close any in-flight WebSocket when the user navigates away from this page.
-  // Without this the streaming thread on the backend keeps running (and the LLM
-  // keeps generating tokens) for 1-2 minutes until the natural end of the response.
   useEffect(() => {
-    return () => {
-      abortQuery();
-    };
+    return () => { abortQuery(); };
   }, [abortQuery]);
 
   useEffect(() => {
     const user = localStorage.getItem("meetbot_user");
-    if (!user) {
-      router.push("/login");
-      return;
-    }
-
-    // Guard: useParams() may return undefined/null during Next.js hydration.
-    // Without this check, API calls fire as /api/jobs/undefined/...
+    if (!user) { router.push("/login"); return; }
     if (!id) return;
 
-    // Load job metadata to display the original filename in the header
-    api.getJobStatus(id).then((job: Job) => {
-      setJobName(job.original_filename);
-    }).catch((err: any) => {
+    api.getJobStatus(id).then((j: Job) => {
+      setJob(j);
+      setPageindexAvailable(j.pageindex_status === "ready");
+    }).catch((err: unknown) => {
       console.error("Failed to load job status:", err);
     });
 
-    // Load chat history — also ensures ChatSession exists on the backend
-    // (GET /api/jobs/{id}/chat/history calls get_or_create_chat_session)
-    // before any WebSocket connection is opened, preventing FOREIGN KEY errors.
     loadHistory();
   }, [id, router, loadHistory]);
 
-  // Auto-scroll to bottom of chat
   useEffect(() => {
     if (scrollRef.current) {
       scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
     }
   }, [messages, loading]);
 
+  useEffect(() => {
+    if (!pageindexAvailable && retrievalMethod === "pageindex") {
+      setRetrievalMethod("vector");
+    }
+  }, [pageindexAvailable, retrievalMethod]);
+
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
-    sendMessage(input, llmMode, retrievalLevel, retrievalLevel === "segment" ? segmentCount : undefined);
+    sendMessage(input, llmMode, retrievalMethod);
     setInput("");
   };
 
@@ -117,203 +209,229 @@ export default function ChatPage() {
     }
   };
 
+  const statusLabel = loading
+    ? t("streaming")
+    : fetchingHistory
+    ? t("loading")
+    : t("ready");
+
   return (
-    <div className="mx-auto flex max-w-5xl flex-col h-[calc(100vh-8rem)]">
-      {/* Header — needs a stacking context (relative + z-10) so the absolute
-          retrieval-method dropdown overlays the Card below, not beneath it.
-          backdrop-blur on the Card creates its own stacking context; without
-          z-index here the dropdown would render behind it regardless of z-40. */}
-      <div className="relative z-10 mb-6 flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
-         <div className="flex-1">
-           <button onClick={() => router.push(`/job/${id}`)} className="mb-2 flex items-center text-sm font-medium text-slate-400 hover:text-white transition-colors">
-              <ArrowLeft className="mr-1 h-4 w-4" /> Back to Job Details
-           </button>
-           <h1 className="text-2xl font-bold tracking-tight text-white drop-shadow-sm">MeetBot RAG Assistant</h1>
-           <p className="mt-1 flex items-center text-sm text-slate-400">
-             {/* FIX: Always show filename, never show raw hash ID to user */}
-             {jobName ? `Conversation: ${jobName}` : "Loading conversation..."}
-             <span className="ml-3 inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs font-medium bg-teal-500/10 text-teal-400">
-               <span className="h-1.5 w-1.5 rounded-full bg-teal-500" />
-               {loading ? "Streaming…" : fetchingHistory ? "Loading history…" : "Ready"}
-             </span>
-           </p>
-         </div>
+    <div className="flex h-[calc(100vh-3.5rem)] overflow-hidden -mt-8 -mx-4 sm:-mx-6">
 
-         {/* Settings Panel */}
-         <div className="flex flex-col gap-3">
-           {/* LLM selector */}
-           <div className="flex items-center gap-3 rounded-lg border border-slate-700 bg-slate-900/50 p-2 text-sm shadow-sm backdrop-blur">
-              <Settings2 className="h-4 w-4 text-slate-400" />
-              <span className="font-medium text-slate-300">Model:</span>
-              <div className="flex rounded bg-slate-950 p-1">
-                <button 
-                  onClick={() => setLlmMode("local")}
-                  className={`flex-1 rounded-sm px-3 py-1 text-xs font-semibold transition-colors ${llmMode === "local" ? "bg-slate-800 text-teal-400 shadow" : "text-slate-500 hover:text-slate-300"}`}
-                >
-                  Local GGUF
-                </button>
-                <button 
-                  onClick={() => setLlmMode("hf")}
-                  className={`flex-1 rounded-sm px-3 py-1 text-xs font-semibold transition-colors ${llmMode === "hf" ? "bg-slate-800 text-violet-400 shadow" : "text-slate-500 hover:text-slate-300"}`}
-                >
-                  HuggingFace
-                </button>
-              </div>
-           </div>
+      {/* ── Left sidebar ──────────────────────────────────────────────────── */}
+      <aside className="hidden w-72 shrink-0 flex-col border-r border-white/5 bg-[#080b14] lg:flex">
+        <div className="flex flex-1 flex-col gap-6 overflow-y-auto px-5 py-6">
 
-           {/* Retrieval level selector — expanded panel uses absolute positioning so
-               it overlays content below instead of pushing the chat card down */}
-           <div className="relative rounded-lg border border-slate-700 bg-slate-900/50 shadow-sm backdrop-blur">
-             <button
-               onClick={() => setShowSettings(!showSettings)}
-               className="flex w-full items-center gap-2 p-2 text-sm"
-             >
-               <SlidersHorizontal className="h-4 w-4 text-slate-400" />
-               <span className="font-medium text-slate-300">Retrieval:</span>
-               <span className="ml-auto text-xs font-semibold text-teal-400 capitalize">{retrievalLevel}</span>
-               {showSettings ? <ChevronDown className="h-3 w-3 text-slate-400" /> : <ChevronRight className="h-3 w-3 text-slate-400" />}
-             </button>
+          <BackButton />
 
-             {showSettings && (
-               <div className="absolute right-0 top-full z-40 mt-1 w-64 rounded-lg border border-slate-700 bg-slate-900 p-3 shadow-xl backdrop-blur space-y-3">
-                 <div className="flex rounded bg-slate-950 p-1 gap-0.5">
-                   {(["chunk", "segment", "document"] as RetrievalLevel[]).map((level) => (
-                     <button
-                       key={level}
-                       onClick={() => setRetrievalLevel(level)}
-                       className={`flex-1 rounded-sm px-3 py-1.5 text-xs font-semibold transition-colors capitalize ${
-                         retrievalLevel === level
-                           ? "bg-slate-800 text-teal-400 shadow"
-                           : "text-slate-500 hover:text-slate-300"
-                       }`}
-                     >
-                       {level}
-                     </button>
-                   ))}
-                 </div>
-                 <p className="text-[11px] text-slate-500 leading-relaxed">
-                   {retrievalLevel === "chunk" && "Retrieves small text chunks for precise, focused answers."}
-                   {retrievalLevel === "segment" && "Retrieves full transcript segments (speaker turns) for broader context."}
-                   {retrievalLevel === "document" && "Retrieves full document context — useful for summaries."}
-                 </p>
-                 {retrievalLevel === "segment" && (
-                   <div className="flex items-center gap-3">
-                     <label className="text-xs font-medium text-slate-400 whitespace-nowrap">Segment Count:</label>
-                     <input
-                       type="number"
-                       min={1}
-                       max={50}
-                       value={segmentCount}
-                       onChange={(e) => setSegmentCount(Math.max(1, Math.min(50, parseInt(e.target.value) || 5)))}
-                       className="w-16 rounded border border-slate-700 bg-slate-950 px-2 py-1 text-center text-xs text-slate-200 outline-none focus:border-teal-500"
-                     />
-                   </div>
-                 )}
-               </div>
-             )}
-           </div>
-         </div>
-      </div>
+          {/* Job info */}
+          <div>
+            <p className="font-mono-editorial mb-1 text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
+              {t("session")}
+            </p>
+            <p className="truncate text-sm font-medium text-slate-300">
+              {job?.original_filename || "Loading…"}
+            </p>
+            <div className="mt-2 flex items-center gap-2">
+              <span
+                className={`h-1.5 w-1.5 rounded-full ${
+                  loading ? "animate-pulse bg-indigo-500" : "bg-slate-500"
+                }`}
+              />
+              <span className="font-mono-editorial text-[10px] text-slate-600">
+                {statusLabel}
+              </span>
+            </div>
+          </div>
 
-      <Card className="flex flex-1 flex-col overflow-hidden border-white/10 bg-slate-900/50 shadow-xl backdrop-blur">
-        
-        {/* Messages Layout */}
-        <div ref={scrollRef} className="flex-1 overflow-y-auto p-4 sm:p-6 space-y-6">
+          <div className="h-px bg-white/5" />
+
+          {/* Retrieval method */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5">
+              <Network className="h-3 w-3 text-slate-700" />
+              <p className="font-mono-editorial text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
+                {t("retrieval")}
+              </p>
+            </div>
+            <PillToggle
+              value={retrievalMethod}
+              onChange={(v) => setRetrievalMethod(v as RetrievalMethod)}
+              options={[
+                { label: t("vector"), value: "vector" },
+                {
+                  label: t("pageindex"),
+                  value: "pageindex",
+                  disabled: !pageindexAvailable,
+                  title: !pageindexAvailable
+                    ? t("pageindexBuildHint")
+                    : t("pageindexUseTree"),
+                },
+              ]}
+            />
+            {!pageindexAvailable && (
+              <p className="mt-1.5 text-[10px] text-slate-700 italic">
+                {t("pageindexNotBuilt")}
+              </p>
+            )}
+          </div>
+
+          {/* LLM mode */}
+          <div>
+            <div className="mb-2 flex items-center gap-1.5">
+              <Settings2 className="h-3 w-3 text-slate-700" />
+              <p className="font-mono-editorial text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
+                {t("llmBackend")}
+              </p>
+            </div>
+            <PillToggle
+              value={llmMode}
+              onChange={(v) => setLlmMode(v as "local" | "hf")}
+              options={[
+                { label: t("local"), value: "local" },
+                { label: t("hfApi"), value: "hf" },
+              ]}
+            />
+          </div>
+
+          <div className="h-px bg-white/5" />
+
+          {/* Job link */}
+          <a
+            href={`/job/${id}`}
+            className="flex items-center gap-2 text-xs text-slate-600 transition-colors hover:text-slate-400"
+          >
+            <ExternalLink className="h-3.5 w-3.5" />
+            {t("viewJobDetails")}
+          </a>
+        </div>
+      </aside>
+
+      {/* ── Main chat area ─────────────────────────────────────────────────── */}
+      <div className="flex flex-1 flex-col overflow-hidden">
+
+        {/* Messages */}
+        <div ref={scrollRef} className="flex-1 overflow-y-auto px-6 py-8">
+          <div className="mx-auto max-w-3xl space-y-8">
           {messages.length === 0 ? (
-            <div className="flex h-full flex-col items-center justify-center text-center text-slate-400">
-               <Bot className="mb-4 h-12 w-12 text-slate-600" />
-               <p className="text-lg font-medium text-slate-300">How can I help you today?</p>
-               <p className="mt-2 max-w-md text-sm">Ask me to summarize the meeting, list action items, or extract key decisions.</p>
+            <div className="flex h-[calc(100vh-14rem)] flex-col items-center justify-center text-center">
+              <Bot className="mb-4 h-10 w-10 text-slate-800" />
+              <p className="font-display text-base font-semibold text-slate-400">
+                {t("emptyTitle")}
+              </p>
+              <p className="mt-2 max-w-sm text-sm text-slate-600">
+                {t("emptyDesc")}
+              </p>
             </div>
           ) : (
             messages.map((msg, i) => (
-              <div key={i} className={`flex gap-4 ${msg.role === "user" ? "justify-end" : "justify-start"}`}>
-                
+              <div
+                key={i}
+                className={`animate-message-in flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+              >
                 {msg.role === "assistant" && (
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-teal-500/20 text-teal-400 ring-1 ring-teal-500/50">
-                    <Bot className="h-5 w-5" />
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 ring-1 ring-indigo-500/20">
+                    <Bot className="h-4 w-4 text-indigo-400/70" />
                   </div>
                 )}
-                
-                <div className={`max-w-[85%] sm:max-w-[75%] rounded-2xl px-5 py-3.5 ${
-                  msg.role === "user" 
-                    ? "bg-violet-600 text-white shadow-md shadow-violet-900/20 rounded-tr-none" 
-                    : "bg-slate-800 text-slate-200 shadow-md shadow-black/20 rounded-tl-none border border-slate-700"
-                }`}>
+
+                <div
+                  className={`max-w-[80%] sm:max-w-[72%] ${
+                    msg.role === "user"
+                      ? "rounded-2xl rounded-tr-sm bg-indigo-500/8 px-5 py-3.5 text-slate-100 ring-1 ring-indigo-500/15"
+                      : "rounded-2xl rounded-tl-sm bg-[#0e1220] px-5 py-4 text-slate-300 ring-1 ring-white/6 border-l-2 border-indigo-500/20"
+                  }`}
+                >
                   {msg.role === "assistant" ? (
-                    <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-pre:bg-slate-900 prose-pre:border prose-pre:border-slate-800">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                        {msg.content || (loading && i === messages.length - 1 ? "..." : "")}
-                      </ReactMarkdown>
-                      {msg.sources && <SourceAccordion sources={msg.sources} />}
+                    <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-p:text-slate-300 prose-pre:bg-[#080b14] prose-pre:border prose-pre:border-white/5 prose-code:text-indigo-300 prose-headings:text-slate-200">
+                      {msg.content ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                          {msg.content}
+                        </ReactMarkdown>
+                      ) : loading && i === messages.length - 1 ? (
+                        <span className="inline-flex items-center gap-1 py-1">
+                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-500/50 animate-bounce [animation-delay:0ms]" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-500/50 animate-bounce [animation-delay:150ms]" />
+                          <span className="h-1.5 w-1.5 rounded-full bg-indigo-500/50 animate-bounce [animation-delay:300ms]" />
+                        </span>
+                      ) : null}
+                      {msg.sources && (
+                        <SourceAccordion
+                          sources={msg.sources}
+                          retrievalMethod={msg.retrieval_method ?? retrievalMethod}
+                        />
+                      )}
+                      {msg.retrieval_level_note && (
+                        <p className="font-mono-editorial mt-2 text-[10px] text-slate-700">
+                          {t("retrievedVia", { level: msg.retrieval_level_note })}
+                        </p>
+                      )}
                     </div>
                   ) : (
-                    <div className="whitespace-pre-wrap text-[15px] leading-relaxed">
+                    <div className="whitespace-pre-wrap text-sm leading-relaxed">
                       {msg.content}
                     </div>
                   )}
                 </div>
 
                 {msg.role === "user" && (
-                  <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-slate-700 text-slate-300 ring-1 ring-white/10">
-                    <User className="h-5 w-5" />
+                  <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 ring-1 ring-indigo-500/20">
+                    <User className="h-4 w-4 text-indigo-400/70" />
                   </div>
                 )}
               </div>
             ))
           )}
+          </div>
         </div>
 
-        {/* Input Bar */}
-        <div className="border-t border-slate-800 bg-slate-950/50 p-4">
+        {/* Input bar */}
+        <div className="border-t border-white/5 bg-[#080b14]/80 px-6 py-4 backdrop-blur">
           {error && (
-            <div className="mb-3 rounded text-sm text-red-400">
-              Error: {error}
+            <p className="mb-2 text-xs text-red-400">Error: {error}</p>
+          )}
+
+          {loading && (
+            <div className="mb-3 flex justify-end">
+              <button
+                type="button"
+                onClick={abortQuery}
+                className="flex items-center gap-1.5 rounded-full border border-red-500/20 bg-red-500/8 px-3 py-1.5 text-[11px] font-semibold text-red-400 transition-colors hover:bg-red-500/15"
+              >
+                <Loader2 className="h-3 w-3 animate-spin" />
+                {t("stopGeneration")}
+              </button>
             </div>
           )}
-          
-          <form onSubmit={handleSubmit} className="relative mx-auto flex max-w-4xl items-end gap-2">
-            <div className="relative flex-1">
-              <textarea
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={handleKeyDown}
-                placeholder={loading ? "Waiting for response..." : "Ask a question about your transcript... (Shift+Enter for new line)"}
-                className="block max-h-[150px] w-full resize-none rounded-xl border border-slate-700 bg-slate-900 py-3.5 pl-4 pr-12 text-[15px] text-slate-200 placeholder:text-slate-500 focus:border-teal-500 focus:outline-none focus:ring-1 focus:ring-teal-500/50 disabled:opacity-50 min-h-[52px]"
-                rows={1}
-                disabled={loading}
-              />
-            </div>
-            
+
+          <form onSubmit={handleSubmit} className="relative mx-auto max-w-3xl">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder={loading ? t("placeholderWaiting") : t("placeholder")}
+              className="block max-h-[140px] min-h-[52px] w-full resize-none rounded-xl border border-white/6 bg-[#0d1020] py-3.5 pl-4 pr-14 text-sm text-slate-200 placeholder:text-slate-600 focus:border-indigo-500/40 focus:outline-none focus:ring-1 focus:ring-indigo-500/20 disabled:opacity-50"
+              rows={1}
+              disabled={loading}
+            />
             <button
               type="submit"
               disabled={!input.trim() || loading}
               className={`absolute bottom-2 right-2 flex h-9 w-9 items-center justify-center rounded-lg transition-all ${
                 input.trim() && !loading
-                  ? "bg-teal-500 text-teal-950 hover:bg-teal-400 hover:shadow-[0_0_15px_rgba(20,184,166,0.4)]" 
-                  : "bg-slate-800 text-slate-500 disable opacity-50"
+                  ? "bg-indigo-500 text-white shadow-[0_0_12px_rgba(129,140,248,0.3)] hover:bg-indigo-400"
+                  : "bg-white/4 text-slate-600"
               }`}
             >
-              <Send className="h-4 w-4 ml-0.5" />
+              <Send className="ml-0.5 h-4 w-4" />
             </button>
-
-            {loading && (
-              <button
-                type="button"
-                onClick={abortQuery}
-                className="absolute -top-12 right-0 flex items-center gap-2 rounded-full bg-red-500/10 px-4 py-1.5 text-xs font-semibold text-red-400 ring-1 ring-red-500/20 hover:bg-red-500/20 transition-all"
-              >
-                <Loader2 className="h-3 w-3 animate-spin" />
-                Stop Generation
-              </button>
-            )}
           </form>
-          <div className="mt-2 text-center text-xs text-slate-500">
-            MeetBot can make mistakes. Consider verifying important information.
-          </div>
+
+          <p className="font-mono-editorial mt-2 text-center text-[10px] text-slate-700">
+            {t("disclaimer")}
+          </p>
         </div>
-      </Card>
-      
+      </div>
     </div>
   );
 }

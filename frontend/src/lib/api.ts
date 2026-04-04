@@ -1,4 +1,4 @@
-import { Job, QueryResponse } from "../types";
+import { Job, QueryResponse, AppSetting, UserProfile } from "../types";
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8080/api";
 
@@ -46,7 +46,7 @@ function authHeaders(): Record<string, string> {
 }
 
 export class ApiError extends Error {
-  constructor(public status: number, message: string) {
+  constructor(public status: number, message: string, public data?: Record<string, unknown>) {
     super(message);
     this.name = "ApiError";
   }
@@ -79,18 +79,22 @@ async function fetcher<T>(endpoint: string, options?: RequestInit): Promise<T> {
     // Previously response.json() consumed the stream, making the subsequent
     // response.text() call throw "body stream already read".
     let message = "An error occurred";
+    let parsedData: Record<string, unknown> | undefined;
     try {
       const rawText = await response.text();
       try {
         const errorData = JSON.parse(rawText);
         message = errorData.detail || errorData.message || rawText || message;
+        if (typeof errorData === 'object' && errorData !== null) {
+          parsedData = errorData as Record<string, unknown>;
+        }
       } catch {
         message = rawText || message;
       }
     } catch {
       // body unreadable — keep default message
     }
-    throw new ApiError(response.status, message);
+    throw new ApiError(response.status, message, parsedData);
   }
 
   // Handle empty responses
@@ -156,6 +160,14 @@ export const api = {
     method: "POST"
   }),
 
+  buildPageIndex: (jobId: string) => fetcher<{ job_id: string; status: string; message: string }>(`/jobs/${jobId}/build-pageindex`, {
+    method: "POST"
+  }),
+
+  cancelPageIndex: (jobId: string) => fetcher<{ job_id: string; status: string; message: string }>(`/jobs/${jobId}/cancel-pageindex`, {
+    method: "POST"
+  }),
+
   /** Return the URL that the browser should use to stream the audio file. */
   getAudioUrl: (jobId: string): string => `${API_BASE_URL}/jobs/${jobId}/audio`,
 
@@ -192,6 +204,21 @@ export const api = {
 
   getChatHistory: (jobId: string) => fetcher<import("../types").ChatMessage[]>(`/jobs/${jobId}/chat/history`),
 
+  getPageIndexTree: (jobId: string) => fetcher<import("../types").PageIndexTree>(`/jobs/${jobId}/pageindex-tree`),
+
+  // --- Settings & Profile ---
+
+  getMe: () => fetcher<UserProfile>("/me"),
+
+  getSettings: () => fetcher<AppSetting[]>("/settings"),
+
+  updateSetting: (key: string, value: string) =>
+    fetcher<{ ok: boolean; restart_required: boolean }>(`/settings/${key}`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ value }),
+    }),
+
   // --- Auth ---
 
   login: async (username: string, password: string) => {
@@ -203,12 +230,69 @@ export const api = {
     return result;
   },
 
-  register: async (username: string, password: string, displayName?: string) => {
-    const result = await fetcher<AuthResponse>("/auth/register", {
+  register: async (username: string, email: string, password: string, displayName?: string) => {
+    return fetcher<{ message: string; email: string }>("/auth/register", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ username, password, display_name: displayName }),
+      body: JSON.stringify({ username, email, password, display_name: displayName }),
+    });
+  },
+
+  /**
+   * Authenticate via Firebase ID token.
+   * Throws ApiError(403) with message "EMAIL_NOT_VERIFIED" when the Firebase
+   * account's email address has not been verified yet.
+   */
+  firebaseLogin: async (idToken: string) => {
+    const result = await fetcher<AuthResponse>("/auth/firebase-login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id_token: idToken }),
     });
     return result;
   },
+
+  forgotPassword: async (email: string) => {
+    return fetcher<{ message: string }>("/auth/forgot-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email }),
+    });
+  },
+
+  resetPassword: async (resetToken: string, newPassword: string) => {
+    return fetcher<{ message: string }>("/auth/reset-password", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reset_token: resetToken, new_password: newPassword }),
+    });
+  },
+
+  verifyRegisterOtp: (email: string, otp: string) =>
+    fetcher<AuthResponse>("/auth/verify-register-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp }),
+    }),
+
+  verifyResetOtp: (email: string, otp: string) =>
+    fetcher<{ reset_token: string }>("/auth/verify-reset-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, otp }),
+    }),
+
+  resendOtp: (email: string, purpose: "register" | "reset") =>
+    fetcher<{ message: string }>("/auth/resend-otp", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, purpose }),
+    }),
+
+  renameSpeaker: (jobId: string, oldName: string, newName: string) =>
+    fetcher<{ renamed: number }>(`/jobs/${jobId}/rename-speaker`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ old_name: oldName, new_name: newName }),
+    }),
 };

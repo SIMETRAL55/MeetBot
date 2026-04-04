@@ -318,6 +318,62 @@ def run_pipeline(job_id: str) -> None:
         _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
                       overall=95, stage=100, msg=done_msg)
 
+        # ── Stage 4b: PageIndex Indexing (optional, conditional) ──────────
+        if settings.PAGEINDEX_ENABLED and settings.PAGEINDEX_AUTO_INDEX:
+            cancel_registry.check_and_raise(job_id)
+            _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
+                          overall=95, stage=100,
+                          msg="Building PageIndex tree (LLM-based)...")
+            try:
+                from ..services.rag.indexer_pageindex import PageIndexAdapter
+
+                adapter = PageIndexAdapter()
+                original_filename = job.original_filename if hasattr(job, 'original_filename') else "Untitled"
+
+                def _pi_progress(stage: str, pct: float, msg: str) -> None:
+                    overall = 95 + pct * 0.04  # 95-99%
+                    _stage_update(db, job_id, JobStatus.INDEXING, progress_cb,
+                                  overall=overall, stage=100, msg=f"PageIndex: {msg}")
+
+                # Update pageindex_status to "building"
+                _job = get_job(db, job_id)
+                if _job:
+                    _job.pageindex_status = "building"
+                    db.commit()
+
+                import asyncio as _aio
+                loop = _aio.new_event_loop()
+                try:
+                    pi_path = loop.run_until_complete(
+                        adapter.build_index(
+                            segments=seg_dicts,
+                            job_id=job_id,
+                            filename=original_filename,
+                            progress_callback=_pi_progress,
+                        )
+                    )
+                finally:
+                    loop.close()
+
+                # Update job with pageindex path
+                _job = get_job(db, job_id)
+                if _job:
+                    _job.pageindex_path = str(pi_path)
+                    _job.pageindex_status = "ready"
+                    db.commit()
+
+                logger.info(f"Job {job_id[:8]}: PageIndex tree built at {pi_path}")
+            except Exception as pi_exc:
+                # PageIndex failure should NOT fail the whole job
+                logger.warning(
+                    "Job %s: PageIndex indexing failed (non-fatal): %s",
+                    job_id[:8], pi_exc,
+                )
+                _job = get_job(db, job_id)
+                if _job:
+                    _job.pageindex_status = "failed"
+                    db.commit()
+
         # ── Complete ───────────────────────────────────────────────────────
         progress_cb("completed", 100, "Processing complete", 100.0)
         update_job_status(

@@ -75,11 +75,30 @@ def _register_pages() -> None:
         api_job_restart,
         api_auth_login,
         api_auth_register,
+        api_firebase_login,
+        api_forgot_password,
+        api_reset_password,
+        api_verify_register_otp,
+        api_verify_reset_otp,
+        api_resend_otp,
         api_get_chat_history,
+        api_build_pageindex,
+        api_cancel_pageindex,
+        api_get_pageindex_tree,
+        api_get_settings,
+        api_update_setting,
+        api_get_me,
+        api_rename_speaker,
     )
     app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
     app.add_api_route("/api/auth/register",          api_auth_register, methods=["POST"])
+    app.add_api_route("/api/auth/firebase-login",    api_firebase_login, methods=["POST"])
+    app.add_api_route("/api/auth/forgot-password",        api_forgot_password,        methods=["POST"])
+    app.add_api_route("/api/auth/reset-password",         api_reset_password,         methods=["POST"])
+    app.add_api_route("/api/auth/verify-register-otp",    api_verify_register_otp,    methods=["POST"])
+    app.add_api_route("/api/auth/verify-reset-otp",       api_verify_reset_otp,       methods=["POST"])
+    app.add_api_route("/api/auth/resend-otp",             api_resend_otp,             methods=["POST"])
     app.add_api_route("/api/jobs",                   api_list_jobs,    methods=["GET"])
     app.add_api_route("/api/jobs/upload",            api_upload_job,   methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}",          api_delete_job,   methods=["DELETE"])
@@ -92,6 +111,13 @@ def _register_pages() -> None:
     app.add_api_route("/api/jobs/{job_id}/cancel",   api_job_cancel,   methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/restart",  api_job_restart,  methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/chat/history", api_get_chat_history, methods=["GET"])
+    app.add_api_route("/api/jobs/{job_id}/build-pageindex", api_build_pageindex, methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}/cancel-pageindex", api_cancel_pageindex, methods=["POST"])
+    app.add_api_route("/api/jobs/{job_id}/pageindex-tree", api_get_pageindex_tree, methods=["GET"])
+    app.add_api_route("/api/jobs/{job_id}/rename-speaker", api_rename_speaker,    methods=["POST"])
+    app.add_api_route("/api/settings",       api_get_settings,    methods=["GET"])
+    app.add_api_route("/api/settings/{key}", api_update_setting,  methods=["PUT"])
+    app.add_api_route("/api/me",             api_get_me,          methods=["GET"])
 
     # Register WebSocket endpoint for streaming chat (RAG Q&A).
     from .ws_chat import ws_chat
@@ -146,6 +172,22 @@ def _auth_middleware(client) -> None:
         return ui.navigate.to("/login")
 
 
+def _apply_db_settings() -> None:
+    """Load AppSetting overrides from the DB and hot-patch the live settings singleton."""
+    from ..db.database import get_session
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        n = settings.apply_db_overrides(db)
+        if n:
+            logger.info("Applied %d DB setting override(s)", n)
+    except Exception as exc:
+        # DB may not have the table yet on first run before migration; non-fatal.
+        logger.debug("_apply_db_settings: skipped — %s", exc)
+    finally:
+        db.close()
+
+
 def create_app() -> None:
     """Configure and create the NiceGUI application."""
     from ..logging_conf import setup_logging
@@ -155,7 +197,48 @@ def create_app() -> None:
 
     # Setup
     _setup_database()
+    _apply_db_settings()
     _setup_upload_dirs()
+
+    # Rate limiting (slowapi)
+    from slowapi import _rate_limit_exceeded_handler
+    from slowapi.errors import RateLimitExceeded
+    from .api import limiter
+    app.state.limiter = limiter
+    app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+    # Security Headers Middleware
+    from starlette.middleware.base import BaseHTTPMiddleware
+    from starlette.requests import Request as _StarletteRequest
+    from starlette.responses import Response as _StarletteResponse
+
+    class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: _StarletteRequest, call_next) -> _StarletteResponse:
+            response = await call_next(request)
+            response.headers["X-Content-Type-Options"] = "nosniff"
+            response.headers["X-Frame-Options"] = "DENY"
+            response.headers["X-XSS-Protection"] = "1; mode=block"
+            response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+            response.headers["Content-Security-Policy"] = (
+                "default-src 'self'; "
+                "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://www.googletagmanager.com; "
+                "connect-src 'self' wss: ws: https://identitytoolkit.googleapis.com; "
+                "img-src 'self' data:; "
+                "style-src 'self' 'unsafe-inline';"
+            )
+            return response
+
+    app.add_middleware(SecurityHeadersMiddleware)
+
+    # CSRF Middleware (pure ASGI — avoids BaseHTTPMiddleware reliability issues)
+    from .csrf_middleware import CSRFMiddleware
+    _csrf_allowed_origins = frozenset({
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+        f"http://localhost:{settings.WEB_PORT}",
+        f"http://127.0.0.1:{settings.WEB_PORT}",
+    })
+    app.add_middleware(CSRFMiddleware, allowed_origins=_csrf_allowed_origins)
 
     # CORS Middleware
     from fastapi.middleware.cors import CORSMiddleware

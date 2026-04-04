@@ -59,9 +59,9 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
   };
 
   return (
-    <Card className="border-white/10 bg-white/5 p-6 backdrop-blur">
+    <Card className="border-white/6 bg-white/5 p-6 backdrop-blur">
       <div className="mb-4 flex items-center gap-2 text-lg font-semibold tracking-tight text-slate-100">
-        <Upload className="h-5 w-5 text-teal-400" />
+        <Upload className="h-5 w-5 text-indigo-400" />
         New Transcription
       </div>
 
@@ -70,12 +70,12 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
           {...getRootProps()}
           className={`flex h-40 cursor-pointer flex-col items-center justify-center rounded-xl border-2 border-dashed transition-colors ${
             isDragActive
-              ? "border-teal-500 bg-teal-500/10"
+              ? "border-indigo-500 bg-indigo-500/10"
               : "border-slate-700 bg-slate-900/50 hover:bg-slate-800/80"
           }`}
         >
           <input {...getInputProps()} />
-          <Upload className={`mb-3 h-8 w-8 ${isDragActive ? "text-teal-400" : "text-slate-400"}`} />
+          <Upload className={`mb-3 h-8 w-8 ${isDragActive ? "text-indigo-400" : "text-slate-400"}`} />
           <p className="text-sm font-medium text-slate-200">
             {isDragActive ? "Drop audio file here..." : "Drag & drop an audio file"}
           </p>
@@ -85,9 +85,9 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
         </div>
       ) : (
         <div className="space-y-4">
-          <div className="flex items-center justify-between rounded-lg border border-slate-700 bg-slate-900/50 p-3">
+          <div className="flex items-center justify-between rounded-lg border border-white/6 bg-slate-900/50 p-3">
             <div className="flex items-center gap-3 overflow-hidden">
-              <FileAudio className="h-8 w-8 shrink-0 text-violet-400" />
+              <FileAudio className="h-8 w-8 shrink-0 text-indigo-400/70" />
               <div className="truncate">
                 <p className="truncate text-sm font-medium text-slate-200">{file.name}</p>
                 <p className="text-xs text-slate-500">{(file.size / (1024 * 1024)).toFixed(2)} MB</p>
@@ -102,7 +102,7 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
             </button>
           </div>
 
-          <div className="rounded-lg border border-white/5 bg-slate-950/50 p-4">
+          <div className="rounded-lg border border-white/6 bg-slate-950/50 p-4">
             <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-wider text-slate-400">
               <Settings2 className="h-3 w-3" />
               Options
@@ -113,7 +113,7 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
                 <select
                   value={language}
                   onChange={(e) => setLanguage(e.target.value)}
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
                 >
                   <option value="">Auto-detect</option>
                   <option value="en">English</option>
@@ -131,7 +131,7 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
                   value={minSpeakers}
                   onChange={(e) => setMinSpeakers(e.target.value ? parseInt(e.target.value) : "")}
                   placeholder="Auto"
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
                 />
               </div>
               <div>
@@ -143,7 +143,7 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
                   value={maxSpeakers}
                   onChange={(e) => setMaxSpeakers(e.target.value ? parseInt(e.target.value) : "")}
                   placeholder="Auto"
-                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 outline-none focus:border-teal-500 focus:ring-1 focus:ring-teal-500"
+                  className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm text-slate-200 placeholder:text-slate-600 outline-none focus:border-indigo-500/50 focus:ring-1 focus:ring-indigo-500/20"
                 />
               </div>
             </div>
@@ -154,7 +154,7 @@ export function UploadDropzone({ onUploadSuccess }: { onUploadSuccess: () => voi
           <button
             onClick={handleUpload}
             disabled={isUploading}
-            className="w-full rounded-md bg-teal-500 py-2.5 text-sm font-medium text-teal-950 shadow-[0_0_15px_rgba(20,184,166,0.5)] transition-all hover:bg-teal-400 hover:shadow-[0_0_25px_rgba(20,184,166,0.6)] disabled:pointer-events-none disabled:opacity-50"
+            className="w-full rounded-md bg-indigo-500 py-2.5 text-sm font-medium text-white shadow-[0_0_15px_rgba(129,140,248,0.4)] transition-all hover:bg-indigo-400 hover:shadow-[0_0_25px_rgba(129,140,248,0.5)] disabled:pointer-events-none disabled:opacity-50"
           >
             {isUploading ? "Uploading..." : "Start Processing"}
           </button>

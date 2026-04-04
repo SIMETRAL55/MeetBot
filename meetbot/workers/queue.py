@@ -1,9 +1,9 @@
 """
 Job queue for background pipeline processing.
 
-Provides a thread-safe queue that dispatches jobs to a single worker thread
-for GPU-bound processing.  Only one job runs at a time since the GPU can only
-handle one model at a time.
+Provides a thread-safe queue that dispatches jobs to one or more worker threads
+for GPU-bound processing.  Keep ``PIPELINE_WORKERS=1`` (the default) on
+GPU-constrained machines to prevent VRAM contention between Whisper and Pyannote.
 
 Important: we use ``queue.Queue`` (a standard threading queue) rather than
 ``asyncio.Queue`` because the worker lives in its own OS thread.  Mixing
@@ -26,11 +26,11 @@ logger = logging.getLogger(__name__)
 
 class JobQueue:
     """
-    Single-worker job queue for pipeline processing.
+    Configurable-concurrency job queue for pipeline processing.
 
-    Jobs are enqueued from the async web layer and executed sequentially
-    in a dedicated worker thread. This ensures:
-    - GPU is used by only one model at a time
+    Jobs are enqueued from the async web layer and executed by
+    ``settings.PIPELINE_WORKERS`` worker threads. This ensures:
+    - GPU is used by only one model at a time (with PIPELINE_WORKERS=1)
     - No VRAM contention between Whisper, Pyannote, embeddings
     - Simple, predictable execution order (FIFO)
     """
@@ -40,7 +40,7 @@ class JobQueue:
         # without any asyncio bridge.  The worker thread calls .get(timeout=1)
         # directly; the async enqueue() calls .put() directly.
         self._queue: queue.Queue[Optional[str]] = queue.Queue()
-        self._worker_thread: Optional[threading.Thread] = None
+        self._worker_threads: list[threading.Thread] = []
         self._running = False
         self._current_job_id: Optional[str] = None
         self._loop: Optional[asyncio.AbstractEventLoop] = None
@@ -57,7 +57,7 @@ class JobQueue:
 
     def start(self, loop: asyncio.AbstractEventLoop) -> None:
         """
-        Start the job queue worker.
+        Start the job queue worker(s).
 
         Args:
             loop: The asyncio event loop (for cross-thread communication).
@@ -74,28 +74,34 @@ class JobQueue:
         from .progress import progress_manager
         progress_manager.set_loop(loop)
 
-        self._worker_thread = threading.Thread(
-            target=self._worker_loop,
-            name="meetbot-pipeline-worker",
-            daemon=True,
-        )
-        self._worker_thread.start()
-        logger.info("Job queue worker started")
+        from ..config import settings
+        n_workers = max(1, settings.PIPELINE_WORKERS)
+        for i in range(n_workers):
+            t = threading.Thread(
+                target=self._worker_loop,
+                name=f"meetbot-pipeline-worker-{i}",
+                daemon=True,
+            )
+            t.start()
+            self._worker_threads.append(t)
+        logger.info("Job queue started with %d worker(s)", n_workers)
 
     def stop(self) -> None:
-        """Stop the job queue worker gracefully."""
+        """Stop all job queue workers gracefully."""
         if not self._running:
             return
 
         self._running = False
-        # Unblock the worker's queue.get() with a sentinel.
-        # queue.Queue.put() is thread-safe — no asyncio bridge needed.
-        self._queue.put(None)
+        # Send one sentinel per worker thread to unblock each queue.get().
+        for _ in self._worker_threads:
+            self._queue.put(None)
 
-        if self._worker_thread and self._worker_thread.is_alive():
-            self._worker_thread.join(timeout=5)
+        for t in self._worker_threads:
+            if t.is_alive():
+                t.join(timeout=5)
+        self._worker_threads.clear()
 
-        logger.info("Job queue worker stopped")
+        logger.info("Job queue workers stopped")
 
     async def enqueue(self, job_id: str) -> int:
         """

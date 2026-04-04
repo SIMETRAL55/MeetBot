@@ -3,6 +3,7 @@
 import { useRef, useState, useEffect, useCallback, forwardRef, useImperativeHandle } from "react";
 import { Play, Pause, Volume2 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useTranslations } from "next-intl";
 
 export interface AudioPlayerHandle {
   seekTo: (seconds: number) => void;
@@ -32,6 +33,7 @@ function formatTime(seconds: number): string {
  */
 export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
   function AudioPlayer({ src, className }, ref) {
+    const t = useTranslations("AudioPlayer");
     const audioRef = useRef<HTMLAudioElement>(null);
     const progressRef = useRef<HTMLDivElement>(null);
     const [playing, setPlaying] = useState(false);
@@ -108,8 +110,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
         )}
       >
         <div className="flex items-center gap-2 text-xs font-medium text-slate-400">
-          <Volume2 className="h-3.5 w-3.5 text-teal-400" />
-          <span>Audio Playback</span>
+          <Volume2 className="h-3.5 w-3.5 text-indigo-400" />
+          <span>{t("playback")}</span>
         </div>
 
         {/* Hidden native audio element */}
@@ -117,7 +119,7 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
         <audio ref={audioRef} src={src} preload="metadata" />
 
         {error ? (
-          <p className="text-xs text-red-400">{error}</p>
+          <p className="text-xs text-red-400">{t("loadError")}</p>
         ) : (
           <>
             {/* Progress bar */}
@@ -127,12 +129,12 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
               onClick={handleProgressClick}
             >
               <div
-                className="h-full rounded-full bg-teal-500 transition-all"
+                className="h-full rounded-full bg-indigo-500 transition-all"
                 style={{ width: `${progressPct}%` }}
               />
               {/* Thumb */}
               <div
-                className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-teal-400 shadow-md ring-2 ring-teal-500/30 transition-all"
+                className="absolute top-1/2 h-3.5 w-3.5 -translate-y-1/2 rounded-full bg-indigo-400 shadow-md ring-2 ring-indigo-500/30 transition-all"
                 style={{ left: `calc(${progressPct}% - 7px)` }}
               />
             </div>
@@ -141,8 +143,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
             <div className="flex items-center justify-between">
               <button
                 onClick={togglePlay}
-                className="flex h-8 w-8 items-center justify-center rounded-full bg-teal-500/20 text-teal-400 transition-colors hover:bg-teal-500/40"
-                aria-label={playing ? "Pause" : "Play"}
+                className="flex h-8 w-8 items-center justify-center rounded-full bg-indigo-500/20 text-indigo-400 transition-colors hover:bg-indigo-500/40"
+                aria-label={playing ? t("pause") : t("play")}
               >
                 {playing ? (
                   <Pause className="h-4 w-4" />
@@ -171,8 +173,8 @@ export const AudioPlayer = forwardRef<AudioPlayerHandle, AudioPlayerProps>(
                     setVolume(v);
                     if (audioRef.current) audioRef.current.volume = v;
                   }}
-                  className="h-1 w-16 cursor-pointer accent-teal-500"
-                  aria-label="Volume"
+                  className="h-1 w-16 cursor-pointer accent-indigo-500"
+                  aria-label={t("volume")}
                 />
               </div>
             </div>

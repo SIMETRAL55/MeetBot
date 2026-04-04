@@ -66,6 +66,18 @@ class User(Base):
     )
     last_login = Column(DateTime, nullable=True)
 
+    # Email authentication & security
+    email = Column(String(255), unique=True, nullable=True, index=True)
+    email_verified = Column(Boolean, default=False, nullable=False)
+    firebase_uid = Column(String(128), unique=True, nullable=True, index=True)
+    password_reset_token = Column(String(64), nullable=True)
+    password_reset_expires = Column(DateTime, nullable=True)
+    failed_login_attempts = Column(Integer, default=0, nullable=False)
+    locked_until = Column(DateTime, nullable=True)
+    otp_hash = Column(String(64), nullable=True)
+    otp_expires = Column(DateTime, nullable=True)
+    otp_purpose = Column(String(16), nullable=True)
+
     # Relationships
     jobs = relationship("Job", back_populates="user", cascade="all, delete-orphan")
 
@@ -108,6 +120,14 @@ class Job(Base):
     transcription_json_path = Column(String(500), nullable=True)
     diarization_json_path = Column(String(500), nullable=True)
     db_dir = Column(String(500), nullable=True)
+
+    # PageIndex (vectorless LLM-based retrieval — optional)
+    pageindex_path = Column(String(500), nullable=True)    # Path to PageIndex JSON tree
+    pageindex_status = Column(String(20), nullable=True)   # pending|building|ready|failed
+
+    # SHA256 of segment texts+speakers at last successful vector index build.
+    # Allows reindex_worker to skip ChromaDB rebuilds when nothing changed.
+    segments_hash = Column(String(64), nullable=True, default="")
 
     # Transcript versioning — bumped on each edit-save-reindex cycle so
     # vectors can track which version of the transcript they represent.
@@ -182,6 +202,35 @@ class Segment(Base):
 
 
 # =============================================================================
+# AppSetting — runtime-configurable key/value store (persisted to DB)
+# =============================================================================
+
+
+class AppSetting(Base):
+    """Runtime-editable configuration overrides stored in the database.
+
+    Keys match ``Settings`` field names (e.g. ``RAG_TOP_K``).  Values are
+    always stored as strings and coerced to the correct type on read.
+    Changes take effect immediately (hot-patched onto the live singleton)
+    except for keys in ``Settings._NEVER_OVERRIDE``.
+    """
+
+    __tablename__ = "app_settings"
+
+    key = Column(String(120), primary_key=True)
+    value = Column(Text, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=lambda: datetime.now(timezone.utc),
+        onupdate=lambda: datetime.now(timezone.utc),
+        nullable=False,
+    )
+
+    def __repr__(self) -> str:
+        return f"<AppSetting(key={self.key!r}, updated={self.updated_at})>"
+
+
+# =============================================================================
 # ChatSession / ChatMessage — persistent RAG conversation history
 # =============================================================================
 
@@ -252,6 +301,7 @@ class ChatMessage(Base):
     content_partial = Column(Text, nullable=True, default="")
     sources = Column(Text, nullable=True)              # JSON-encoded source list
     llm_backend = Column(String(20), nullable=True)    # "local" | "hf"
+    retrieval_method = Column(String(20), nullable=True)  # "vector" | "pageindex" | null for legacy
     # streaming|completed|stopped|interrupted  (default covers legacy rows)
     status = Column(String(20), nullable=False, default="completed")
     created_at = Column(
@@ -284,6 +334,7 @@ class ChatMessage(Base):
             "content": self.content,
             "sources": sources_list,
             "llm_backend": self.llm_backend,
+            "retrieval_method": self.retrieval_method,
             "status": self.status or "completed",
             "created_at": self.created_at.isoformat() if self.created_at else None,
         }

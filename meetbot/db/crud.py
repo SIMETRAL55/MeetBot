@@ -12,7 +12,7 @@ from typing import Optional
 
 from sqlalchemy.orm import Session
 
-from .models import User, Job, JobStatus, Segment, ChatSession, ChatMessage
+from .models import User, Job, JobStatus, Segment, ChatSession, ChatMessage, AppSetting
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +62,44 @@ def get_user_by_username(db: Session, username: str) -> Optional[User]:
 def get_user_by_id(db: Session, user_id: str) -> Optional[User]:
     """Get user by ID."""
     return db.query(User).filter(User.id == user_id).first()
+
+
+def get_user_by_email(db: Session, email: str) -> Optional[User]:
+    """Get user by email address."""
+    return db.query(User).filter(User.email == email).first()
+
+
+def get_user_by_firebase_uid(db: Session, firebase_uid: str) -> Optional[User]:
+    """Get user by Firebase UID."""
+    return db.query(User).filter(User.firebase_uid == firebase_uid).first()
+
+
+def create_user_firebase(
+    db: Session,
+    username: str,
+    password_hash: str,
+    email: Optional[str] = None,
+    firebase_uid: Optional[str] = None,
+    email_verified: bool = False,
+    display_name: Optional[str] = None,
+    is_admin: bool = False,
+) -> User:
+    """Create a user that authenticates via Firebase (no local password)."""
+    user = User(
+        username=username,
+        password_hash=password_hash,
+        display_name=display_name or username,
+        is_admin=is_admin,
+        email=email,
+        firebase_uid=firebase_uid,
+        email_verified=email_verified,
+        failed_login_attempts=0,
+    )
+    db.add(user)
+    db.commit()
+    db.refresh(user)
+    logger.info(f"Created Firebase user: {username}")
+    return user
 
 
 def update_user_last_login(db: Session, user: User) -> None:
@@ -533,6 +571,7 @@ def create_chat_message(
     sources: Optional[list] = None,
     llm_backend: Optional[str] = None,
     status: str = "completed",
+    retrieval_method: Optional[str] = None,
 ) -> ChatMessage:
     """
     Append a new message to a ChatSession.
@@ -548,6 +587,7 @@ def create_chat_message(
                 "interrupted".  Use "streaming" when creating the placeholder
                 row at the start of generation; update to a terminal status
                 with ``update_chat_message`` when generation ends.
+        retrieval_method: "vector" | "pageindex" (for assistant messages).
 
     Returns:
         Created ChatMessage.
@@ -560,6 +600,7 @@ def create_chat_message(
         sources=sources_json,
         llm_backend=llm_backend,
         status=status,
+        retrieval_method=retrieval_method,
     )
     db.add(msg)
     db.commit()
@@ -574,6 +615,7 @@ def update_chat_message(
     status: str,
     sources: Optional[list] = None,
     llm_backend: Optional[str] = None,
+    retrieval_method: Optional[str] = None,
 ) -> Optional[ChatMessage]:
     """
     Update the content and status of an existing ChatMessage in-place.
@@ -589,6 +631,7 @@ def update_chat_message(
         status: Terminal status — "completed" | "stopped" | "interrupted".
         sources: Updated source list (replaces previous value if provided).
         llm_backend: LLM backend label (replaces previous value if provided).
+        retrieval_method: "vector" | "pageindex" (replaces previous value if provided).
 
     Returns:
         Updated ChatMessage or None if not found.
@@ -603,6 +646,8 @@ def update_chat_message(
         msg.sources = _json.dumps(sources, ensure_ascii=False)
     if llm_backend is not None:
         msg.llm_backend = llm_backend
+    if retrieval_method is not None:
+        msg.retrieval_method = retrieval_method
     db.commit()
     db.refresh(msg)
     return msg
@@ -885,3 +930,41 @@ def bump_transcript_version(db: Session, job_id: str) -> int:
         job_id[:8], current, job.transcript_version,
     )
     return job.transcript_version
+
+
+# =============================================================================
+# AppSetting CRUD — runtime-configurable key/value store
+# =============================================================================
+
+
+def get_all_settings(db: Session) -> list[AppSetting]:
+    """Return all AppSetting rows ordered by key."""
+    return db.query(AppSetting).order_by(AppSetting.key).all()
+
+
+def get_setting(db: Session, key: str) -> Optional[AppSetting]:
+    """Return a single AppSetting by key, or None if not found."""
+    return db.query(AppSetting).filter(AppSetting.key == key).first()
+
+
+def upsert_setting(db: Session, key: str, value: str) -> AppSetting:
+    """Insert or update an AppSetting row.
+
+    Args:
+        db: Database session.
+        key: Setting key (must match a ``Settings`` field name).
+        value: New string value.
+
+    Returns:
+        The created or updated AppSetting row.
+    """
+    row = get_setting(db, key)
+    if row:
+        row.value = value
+        row.updated_at = datetime.now(timezone.utc)
+    else:
+        row = AppSetting(key=key, value=value, updated_at=datetime.now(timezone.utc))
+        db.add(row)
+    db.commit()
+    db.refresh(row)
+    return row

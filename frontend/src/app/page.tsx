@@ -4,11 +4,13 @@ import { useJobPolling } from "@/lib/hooks/useJobPolling";
 import { UploadDropzone } from "@/components/UploadDropzone";
 import { JobCard } from "@/components/JobCard";
 import { Loader2, Mic } from "lucide-react";
+import { useTranslations } from "next-intl";
 
 import { useEffect } from "react";
 import { useRouter } from "next/navigation";
 
 export default function DashboardPage() {
+  const t = useTranslations("Dashboard");
   const router = useRouter();
   const { jobs, loading, error, refetch } = useJobPolling();
 
@@ -24,19 +26,19 @@ export default function DashboardPage() {
       
       <div className="flex flex-col items-start justify-between gap-4 md:flex-row md:items-center">
         <div>
-          <h1 className="text-3xl font-bold tracking-tight text-white drop-shadow-sm">Dashboard</h1>
-          <p className="mt-1 text-slate-400">Manage your transcriptions and AI jobs.</p>
+          <h1 className="font-display text-3xl font-bold tracking-tight text-white">{t("title")}</h1>
+          <p className="mt-1 text-slate-400">{t("subtitle")}</p>
         </div>
       </div>
 
       <UploadDropzone onUploadSuccess={refetch} />
 
       <div className="space-y-4">
-        <h2 className="text-xl font-semibold tracking-tight text-slate-200">Recent Jobs</h2>
+        <h2 className="border-l-2 border-indigo-500/30 pl-3 text-xl font-semibold tracking-tight text-slate-200">{t("recentJobs")}</h2>
         
         {loading ? (
           <div className="flex justify-center p-12">
-            <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
+            <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
           </div>
         ) : error ? (
           <div className="rounded-lg border border-red-500/20 bg-red-500/10 p-4 text-sm text-red-400">
@@ -47,8 +49,8 @@ export default function DashboardPage() {
             <div className="mb-4 rounded-full bg-slate-800 p-3 ring-1 ring-white/10">
               <Mic className="h-6 w-6 text-slate-400" />
             </div>
-            <h3 className="text-lg font-medium text-slate-200">No transcriptions yet</h3>
-            <p className="mt-1 text-sm text-slate-500">Upload an audio file above to get started.</p>
+            <h3 className="text-lg font-medium text-slate-200">{t("empty.title")}</h3>
+            <p className="mt-1 text-sm text-slate-500">{t("empty.hint")}</p>
           </div>
         ) : (
           <div className="grid gap-4">

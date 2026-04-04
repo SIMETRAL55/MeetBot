@@ -379,6 +379,87 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
+    # PageIndex Configuration (vectorless LLM-based retrieval — optional)
+    # =========================================================================
+    PAGEINDEX_ENABLED: bool = Field(
+        False,
+        env="PAGEINDEX_ENABLED",
+        description="Master toggle for PageIndex integration. When False, all "
+                    "PageIndex features are disabled (zero regression risk).",
+    )
+
+    PAGEINDEX_AUTO_INDEX: bool = Field(
+        False,
+        env="PAGEINDEX_AUTO_INDEX",
+        description="Automatically build PageIndex during pipeline ingestion "
+                    "(Stage 4b). When False, PageIndex must be triggered manually "
+                    "via the 'Build PageIndex' button or API endpoint.",
+    )
+
+    PAGEINDEX_LLM_BACKEND: str = Field(
+        "openrouter",
+        env="PAGEINDEX_LLM_BACKEND",
+        description="LLM backend for PageIndex calls: 'vertexai' (Vertex AI via gcloud ADC, "
+                    "recommended), 'google' (Gemini via Google AI Studio API key), "
+                    "'openrouter' (free models), 'ollama' or 'local' "
+                    "(Ollama offline fallback), 'openai', or 'custom'.",
+    )
+
+    VERTEXAI_PROJECT: str = Field(
+        "",
+        env="VERTEXAI_PROJECT",
+        description="Google Cloud project ID or number for Vertex AI. Required when "
+                    "PAGEINDEX_LLM_BACKEND='vertexai'.",
+    )
+
+    VERTEXAI_LOCATION: str = Field(
+        "us-central1",
+        env="VERTEXAI_LOCATION",
+        description="Google Cloud region for Vertex AI endpoints. "
+                    "Default: 'us-central1'.",
+    )
+
+    PAGEINDEX_LLM_BASE_URL: str = Field(
+        "",
+        env="PAGEINDEX_LLM_BASE_URL",
+        description="OpenAI-compatible API base URL for PageIndex LLM calls. "
+                    "Leave empty to auto-resolve from PAGEINDEX_LLM_BACKEND.",
+    )
+
+    PAGEINDEX_LLM_MODEL: str = Field(
+        "qwen/qwen3-next-80b-a3b-instruct:free",
+        env="PAGEINDEX_LLM_MODEL",
+        description="Model ID for PageIndex LLM calls. Default is the free "
+                    "Qwen3 80B MoE on OpenRouter. Use 'qwen2.5:3b' for local fallback.",
+    )
+
+    PAGEINDEX_LLM_API_KEY: str = Field(
+        "",
+        env="PAGEINDEX_LLM_API_KEY",
+        description="API key for the PageIndex LLM backend. Required for "
+                    "OpenRouter/OpenAI. Use 'not-needed' for local servers.",
+    )
+
+    PAGEINDEX_LLM_MODEL_PATH: str = Field(
+        "",
+        env="PAGEINDEX_LLM_MODEL_PATH",
+        description="Path to a local HuggingFace model directory (safetensors). "
+                    "Used by the 'ollama' backend to import models without internet.",
+    )
+
+    PAGEINDEX_MAX_PAGE_TOKENS: int = Field(
+        20000,
+        env="PAGEINDEX_MAX_PAGE_TOKENS",
+        description="Maximum tokens per tree node during PageIndex indexing.",
+    )
+
+    PAGEINDEX_OUTPUT_DIR: str = Field(
+        "./db/pageindex",
+        env="PAGEINDEX_OUTPUT_DIR",
+        description="Directory for storing PageIndex JSON tree files.",
+    )
+
+    # =========================================================================
     # Web Application Configuration
     # =========================================================================
     WEB_HOST: str = Field(
@@ -420,6 +501,126 @@ class Settings(BaseSettings):
         env="ALLOWED_AUDIO_EXTENSIONS",
         description="Comma-separated list of allowed audio file extensions",
     )
+
+    PIPELINE_WORKERS: int = Field(
+        1,
+        env="PIPELINE_WORKERS",
+        description="Max concurrent pipeline jobs. Keep at 1 for GPU-constrained machines "
+                    "to prevent VRAM contention between Whisper and Pyannote.",
+    )
+
+    RATE_LIMIT_UPLOAD: str = Field(
+        "10/hour",
+        env="RATE_LIMIT_UPLOAD",
+        description="Upload rate limit per IP address (slowapi format, e.g. '10/hour').",
+    )
+
+    RATE_LIMIT_CHAT: str = Field(
+        "60/minute",
+        env="RATE_LIMIT_CHAT",
+        description="Chat WebSocket connection rate limit per IP address.",
+    )
+
+    # =========================================================================
+    # Firebase Authentication (optional — enables social login)
+    # =========================================================================
+    FIREBASE_PROJECT_ID: str = Field(
+        "",
+        env="FIREBASE_PROJECT_ID",
+        description="Firebase project ID (e.g. 'my-meetbot-app'). Required for Firebase auth.",
+    )
+
+    FIREBASE_WEB_API_KEY: str = Field(
+        "",
+        env="FIREBASE_WEB_API_KEY",
+        description="Firebase Web API Key from the Firebase console (Browser key).",
+    )
+
+    # =========================================================================
+    # SMTP Email Configuration (for password reset emails)
+    # =========================================================================
+    SMTP_HOST: str = Field(
+        "",
+        env="SMTP_HOST",
+        description="SMTP server hostname (e.g. 'smtp.gmail.com').",
+    )
+
+    SMTP_PORT: int = Field(
+        587,
+        env="SMTP_PORT",
+        description="SMTP server port. 587 for STARTTLS (recommended), 465 for SSL.",
+    )
+
+    SMTP_USER: str = Field(
+        "",
+        env="SMTP_USER",
+        description="SMTP login username (usually the sender email address).",
+    )
+
+    SMTP_PASSWORD: str = Field(
+        "",
+        env="SMTP_PASSWORD",
+        description="SMTP login password or app-specific password.",
+    )
+
+    SMTP_FROM: str = Field(
+        "noreply@meetbot.app",
+        env="SMTP_FROM",
+        description="From address used in outgoing emails.",
+    )
+
+    # =========================================================================
+    # Google Analytics 4
+    # =========================================================================
+    GA4_MEASUREMENT_ID: str = Field(
+        "",
+        env="GA4_MEASUREMENT_ID",
+        description="GA4 Measurement ID (e.g. 'G-XXXXXXXXXX'). Leave empty to disable analytics.",
+    )
+
+    # =========================================================================
+    # Runtime DB Overrides
+    # =========================================================================
+
+    # Keys that must never be hot-patched at runtime (security / structural).
+    # WEB_SECRET_KEY changing mid-session would invalidate all live tokens.
+    _NEVER_OVERRIDE: ClassVar[set[str]] = {
+        "WEB_SECRET_KEY",
+        "WEB_STORAGE_SECRET",
+        "DB_PATH",
+    }
+
+    def apply_db_overrides(self, session) -> int:
+        """Load AppSetting rows from DB and hot-patch the live settings singleton.
+
+        Called once at server startup after the DB is initialised. Any key in
+        ``_NEVER_OVERRIDE`` is silently skipped.
+
+        Args:
+            session: SQLAlchemy Session (caller is responsible for closing it).
+
+        Returns:
+            Number of overrides successfully applied.
+        """
+        from .db.models import AppSetting as _AppSetting
+        _log = logging.getLogger("meetbot.config")
+        rows = session.query(_AppSetting).all()
+        applied = 0
+        for row in rows:
+            key = row.key
+            if key in self._NEVER_OVERRIDE:
+                continue
+            if not hasattr(self, key):
+                _log.debug("apply_db_overrides: unknown key %s — skipped", key)
+                continue
+            current = getattr(self, key)
+            try:
+                coerced = _coerce(current, row.value)
+                object.__setattr__(self, key, coerced)
+                applied += 1
+            except Exception as exc:
+                _log.warning("apply_db_overrides: skip %s — %s", key, exc)
+        return applied
 
     def get_allowed_extensions(self) -> list[str]:
         """Get allowed audio extensions as a list."""
@@ -516,6 +717,36 @@ class Settings(BaseSettings):
         """Get vector database path as pathlib.Path."""
         return Path(self.VECTOR_DB_PATH).expanduser().resolve()
 
+    def get_pageindex_base_url(self) -> str:
+        """Resolve the LLM base URL based on the configured backend."""
+        if self.PAGEINDEX_LLM_BASE_URL:
+            return self.PAGEINDEX_LLM_BASE_URL
+        if self.PAGEINDEX_LLM_BACKEND == "vertexai":
+            loc = self.VERTEXAI_LOCATION or "us-central1"
+            proj = self.VERTEXAI_PROJECT
+            if not proj:
+                raise ValueError(
+                    "VERTEXAI_PROJECT must be set when PAGEINDEX_LLM_BACKEND='vertexai'."
+                )
+            return (
+                f"https://{loc}-aiplatform.googleapis.com/v1/projects/{proj}"
+                f"/locations/{loc}/endpoints/openapi"
+            )
+        _backend_urls = {
+            "google": "https://generativelanguage.googleapis.com/v1beta/openai/",
+            "openrouter": "https://openrouter.ai/api/v1",
+            "openai": "https://api.openai.com/v1",
+            "local": "http://localhost:11434/v1",
+            "ollama": "http://localhost:11434/v1",
+        }
+        return _backend_urls.get(self.PAGEINDEX_LLM_BACKEND, "https://openrouter.ai/api/v1")
+
+    def get_pageindex_output_dir(self) -> Path:
+        """Get PageIndex output directory as pathlib.Path, creating if needed."""
+        p = Path(self.PAGEINDEX_OUTPUT_DIR).expanduser().resolve()
+        p.mkdir(parents=True, exist_ok=True)
+        return p
+
     def get_cache_dir(self) -> Path:
         """Get cache directory path as pathlib.Path."""
         return Path(self.CACHE_DIR).expanduser().resolve()
@@ -527,6 +758,27 @@ class Settings(BaseSettings):
     def get_prepared_docs_dir(self) -> Path:
         """Get prepared documents directory path as pathlib.Path."""
         return Path(self.PREPARED_DOCS_DIR).expanduser().resolve()
+
+
+# ============================================================================
+# Type coercion helper for DB overrides
+# ============================================================================
+
+
+def _coerce(current, raw: str):
+    """Coerce a DB string value to match the Python type of *current*.
+
+    Handles bool, int, float, str, and Optional[str] (None when raw is
+    'none', 'null', or empty string).
+    """
+    if isinstance(current, bool):
+        return raw.strip().lower() in ("true", "1", "yes", "on")
+    if isinstance(current, int):
+        return int(raw)
+    if isinstance(current, float):
+        return float(raw)
+    # str / Optional[str] / None
+    return raw if raw.strip().lower() not in ("none", "null", "") else None
 
 
 # ============================================================================
