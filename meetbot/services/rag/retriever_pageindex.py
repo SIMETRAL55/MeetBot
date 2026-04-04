@@ -68,14 +68,10 @@ class PageIndexRetriever:
 
     def _llm_call(self, prompt: str) -> str:
         """Single synchronous LLM call via ``pageindex_env()``."""
-        from ...adapters.llm.openai_adapter import pageindex_env
+        from ...adapters.llm.openai_adapter import pageindex_env, get_pageindex_client
 
         with pageindex_env(settings):
-            import openai
-            client = openai.OpenAI(
-                base_url=self.base_url,
-                api_key=self.api_key,
-            )
+            client = get_pageindex_client(settings)
             response = client.chat.completions.create(
                 model=self.model,
                 messages=[{"role": "user", "content": prompt}],

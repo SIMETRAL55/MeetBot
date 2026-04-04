@@ -117,11 +117,10 @@ class PageIndexAdapter:
         api_key = self.api_key
 
         def _sync() -> str:
-            from ...adapters.llm.openai_adapter import pageindex_env
+            from ...adapters.llm.openai_adapter import pageindex_env, get_pageindex_client
 
             with pageindex_env(settings):
-                import openai
-                client = openai.OpenAI(base_url=base_url, api_key=api_key)
+                client = get_pageindex_client(settings)
                 response = client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
