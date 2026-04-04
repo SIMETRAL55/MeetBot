@@ -11,14 +11,14 @@ import {
 import { api } from "@/lib/api";
 import { formatDistanceToNow } from "date-fns";
 
-// Collapsed to semantic tokens: amber=active, green=success, red=error, slate=neutral
+// Collapsed to semantic tokens: indigo=active, green=success, red=error, slate=neutral
 const statusConfig: Record<string, { textColor: string; badgeColor: string; progressColor: string; icon: LucideIcon }> = {
   pending:     { textColor: "text-slate-400",  badgeColor: "text-slate-400 border-slate-500/40",   progressColor: "*:bg-slate-500",  icon: Clock },
-  transcribing:{ textColor: "text-amber-400",  badgeColor: "text-amber-400 border-amber-500/40",   progressColor: "*:bg-amber-500",  icon: PlayCircle },
-  diarizing:   { textColor: "text-amber-400",  badgeColor: "text-amber-400 border-amber-500/40",   progressColor: "*:bg-amber-500",  icon: PlayCircle },
-  aligning:    { textColor: "text-amber-400",  badgeColor: "text-amber-400 border-amber-500/40",   progressColor: "*:bg-amber-500",  icon: PlayCircle },
-  indexing:    { textColor: "text-amber-400",  badgeColor: "text-amber-400 border-amber-500/40",   progressColor: "*:bg-amber-500",  icon: PlayCircle },
-  reindexing:  { textColor: "text-amber-400",  badgeColor: "text-amber-400 border-amber-500/40",   progressColor: "*:bg-amber-500",  icon: PlayCircle },
+  transcribing:{ textColor: "text-indigo-400",  badgeColor: "text-indigo-400 border-indigo-500/40",   progressColor: "*:bg-indigo-500",  icon: PlayCircle },
+  diarizing:   { textColor: "text-indigo-400",  badgeColor: "text-indigo-400 border-indigo-500/40",   progressColor: "*:bg-indigo-500",  icon: PlayCircle },
+  aligning:    { textColor: "text-indigo-400",  badgeColor: "text-indigo-400 border-indigo-500/40",   progressColor: "*:bg-indigo-500",  icon: PlayCircle },
+  indexing:    { textColor: "text-indigo-400",  badgeColor: "text-indigo-400 border-indigo-500/40",   progressColor: "*:bg-indigo-500",  icon: PlayCircle },
+  reindexing:  { textColor: "text-indigo-400",  badgeColor: "text-indigo-400 border-indigo-500/40",   progressColor: "*:bg-indigo-500",  icon: PlayCircle },
   completed:   { textColor: "text-green-400",  badgeColor: "text-green-400 border-green-500/40",   progressColor: "*:bg-green-500",  icon: Eye },
   cancelled:   { textColor: "text-slate-400",  badgeColor: "text-slate-400 border-slate-600/40",   progressColor: "*:bg-slate-500",  icon: StopCircle },
   failed:      { textColor: "text-red-400",    badgeColor: "text-red-400 border-red-500/40",       progressColor: "*:bg-red-500",    icon: AlertCircle },
@@ -123,12 +123,12 @@ export function JobCard({
         {/* Right: Actions */}
         <div className="flex items-center gap-2 border-t border-white/6 pt-3 sm:border-t-0 sm:pt-0">
           {/* View link: available for all statuses */}
-          <a href={`/job/${job.id}`} className="inline-flex h-8 items-center justify-center rounded-md bg-amber-500/10 px-3 text-sm font-medium text-amber-400 transition-colors hover:bg-amber-500/20 hover:text-amber-300">
+          <a href={`/job/${job.id}`} className="inline-flex h-8 items-center justify-center rounded-md bg-indigo-500/10 px-3 text-sm font-medium text-indigo-400 transition-colors hover:bg-indigo-500/20 hover:text-indigo-300">
             <Eye className="mr-1.5 h-4 w-4" /> View
           </a>
 
           {job.status === "completed" && job.db_dir && (
-            <a href={`/chat/${job.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-amber-500/8 text-amber-400 transition-colors hover:bg-amber-500/15 hover:text-amber-300" title="Ask AI">
+            <a href={`/chat/${job.id}`} className="inline-flex h-8 w-8 items-center justify-center rounded-md bg-indigo-500/8 text-indigo-400 transition-colors hover:bg-indigo-500/15 hover:text-indigo-300" title="Ask AI">
               <Search className="h-4 w-4" />
             </a>
           )}
@@ -145,7 +145,7 @@ export function JobCard({
           {isRestartable && (
             <button
               onClick={handleRestart}
-              className="inline-flex h-8 items-center justify-center rounded-md px-3 text-sm font-medium text-amber-400 transition-colors hover:bg-amber-500/10 hover:text-amber-300"
+              className="inline-flex h-8 items-center justify-center rounded-md px-3 text-sm font-medium text-indigo-400 transition-colors hover:bg-indigo-500/10 hover:text-indigo-300"
             >
               <RotateCcw className="mr-1.5 h-4 w-4" /> Restart
             </button>

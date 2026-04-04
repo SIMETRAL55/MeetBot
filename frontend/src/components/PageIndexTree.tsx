@@ -78,7 +78,7 @@ function SubtopicNode({
     <div
       className={`group cursor-pointer rounded-md border px-3 py-2.5 transition-all ${
         highlighted
-          ? "border-amber-500/40 bg-amber-500/8"
+          ? "border-indigo-500/40 bg-indigo-500/8"
           : "border-white/4 bg-white/2 hover:border-white/8 hover:bg-white/4"
       }`}
       onClick={() => {
@@ -138,7 +138,7 @@ function TopicCard({
 
   return (
     <div className={`rounded-xl border transition-all ${
-      isHighlighted ? "border-amber-500/35" : "border-white/6"
+      isHighlighted ? "border-indigo-500/35" : "border-white/6"
     } bg-[#0d1120]`}>
       {/* Card header — click to expand */}
       <button
@@ -147,14 +147,14 @@ function TopicCard({
       >
         <span className="mt-0.5 shrink-0 text-slate-600 transition-colors group-hover:text-slate-400">
           {open
-            ? <ChevronDown className="h-4 w-4 text-amber-500/60" />
+            ? <ChevronDown className="h-4 w-4 text-indigo-400/60" />
             : <ChevronRight className="h-4 w-4 text-slate-600" />
           }
         </span>
 
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2">
-            <span className="font-mono-editorial shrink-0 rounded bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-amber-400/80 ring-1 ring-amber-500/15">
+            <span className="font-mono-editorial shrink-0 rounded bg-indigo-500/10 px-1.5 py-0.5 text-[10px] font-semibold text-indigo-400/80 ring-1 ring-indigo-500/15">
               {node.node_id}
             </span>
             <span className="truncate text-sm font-medium text-slate-200">{node.title}</span>
@@ -233,7 +233,7 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
   if (loading) {
     return (
       <div className="flex items-center gap-2 py-6 text-sm text-slate-600">
-        <Network className="h-4 w-4 animate-pulse text-amber-500/50" />
+        <Network className="h-4 w-4 animate-pulse text-indigo-400/50" />
         <span className="font-mono-editorial">Loading PageIndex tree…</span>
       </div>
     );
@@ -254,10 +254,10 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
       {/* ROOT header */}
       <div className="rounded-xl border border-white/6 bg-[#0d1120] px-5 py-4">
         <div className="flex items-start gap-3">
-          <Network className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" />
+          <Network className="mt-0.5 h-4 w-4 shrink-0 text-indigo-400" />
           <div className="flex-1 min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono-editorial text-xs font-semibold text-amber-500/70">
+              <span className="font-mono-editorial text-xs font-semibold text-indigo-400/70">
                 ROOT
               </span>
               <h3 className="font-display text-base font-semibold text-slate-100">
@@ -315,8 +315,8 @@ export function PageIndexTree({ jobId, onHighlightSegments }: PageIndexTreeProps
       )}
 
       {highlightRange && (
-        <div className="flex items-center justify-between rounded-md border border-amber-500/20 bg-amber-500/5 px-3 py-2">
-          <span className="font-mono-editorial text-xs text-amber-500/70">
+        <div className="flex items-center justify-between rounded-md border border-indigo-500/20 bg-indigo-500/5 px-3 py-2">
+          <span className="font-mono-editorial text-xs text-indigo-400/70">
             Highlighting segments {highlightRange[0]}–{highlightRange[1]}
           </span>
           <button

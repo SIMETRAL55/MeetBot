@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { Segment } from "@/types";
 import { api } from "@/lib/api";
 import { Card } from "@/components/ui/card";
@@ -12,9 +13,14 @@ interface TranscriptEditorProps {
   jobId: string;
   /** Called when the user clicks a segment timestamp — seek the audio player. */
   onTimestampClick?: (seconds: number) => void;
+  /** Called whenever the unique speaker list changes (on load or after edits). */
+  onSpeakersChange?: (speakers: string[]) => void;
+  /** Increment this to force a full reload of segments (e.g. after a bulk rename). */
+  refreshKey?: number;
 }
 
-export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorProps) {
+export function TranscriptEditor({ jobId, onTimestampClick, onSpeakersChange, refreshKey }: TranscriptEditorProps) {
+  const t = useTranslations("TranscriptEditor");
   const [segments, setSegments] = useState<Segment[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -32,8 +38,12 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
       // The API returns { segments: [...] } or just an array depending on the exact JSON format,
       // handling both cases safely here:
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const data = Array.isArray(res) ? res : (res as any).segments;
+      const data: Segment[] = Array.isArray(res) ? res : (res as any).segments;
       setSegments(data || []);
+      if (onSpeakersChange) {
+        const unique = [...new Set((data || []).map((s) => s.speaker).filter(Boolean))];
+        onSpeakersChange(unique);
+      }
       setError(null);
     } catch (err: unknown) {
       setError((err as Error).message || "Failed to load transcript");
@@ -45,7 +55,7 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
   useEffect(() => {
     loadTranscript();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jobId]);
+  }, [jobId, refreshKey]);
 
   const startEditing = (index: number, seg: Segment) => {
     setEditingId(index);
@@ -80,6 +90,10 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
       const updated = [...segments];
       updated[index] = { ...updated[index], speaker: editSpeaker, text: editText };
       setSegments(updated);
+      if (onSpeakersChange) {
+        const unique = [...new Set(updated.map((s) => s.speaker).filter(Boolean))];
+        onSpeakersChange(unique);
+      }
       cancelEditing();
       
       // Might want to call trigger reindex here or prompt the user.
@@ -99,7 +113,7 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
   if (loading) {
     return (
       <Card className="flex h-96 items-center justify-center border-white/10 bg-slate-900/50 backdrop-blur">
-        <Loader2 className="h-8 w-8 animate-spin text-teal-500" />
+        <Loader2 className="h-8 w-8 animate-spin text-indigo-400" />
       </Card>
     );
   }
@@ -115,23 +129,23 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
   if (segments.length === 0) {
     return (
       <Card className="flex h-96 flex-col items-center justify-center border-white/10 bg-slate-900/50 text-slate-400 backdrop-blur">
-        <p>No transcript data available for this job.</p>
-        <p className="text-sm">Wait for processing to complete or check the logs.</p>
+        <p>{t("empty")}</p>
+        <p className="text-sm">{t("emptyHint")}</p>
       </Card>
     );
   }
 
   // Pre-calculate speaker colors for visual distinction
   const speakers = Array.from(new Set(segments.map(s => s.speaker)));
-  const colors = ["text-blue-400", "text-teal-400", "text-purple-400", "text-orange-400", "text-pink-400"];
+  const colors = ["text-blue-400", "text-indigo-400", "text-purple-400", "text-orange-400", "text-pink-400"];
   const getSpeakerColor = (s: string) => colors[speakers.indexOf(s) % colors.length];
 
   return (
     <Card className="flex h-[600px] flex-col overflow-hidden border-white/10 bg-slate-900/50 backdrop-blur">
       <div className="flex items-center justify-between border-b border-white/10 bg-slate-950/50 p-4">
-        <h3 className="font-semibold text-slate-200">Interactive Transcript</h3>
+        <h3 className="font-semibold text-slate-200">{t("title")}</h3>
         <p className="text-sm text-slate-400">
-          {segments.length} segments • {formatTime(segments[segments.length - 1]?.end || 0)}
+          {segments.length} {t("segments")} • {formatTime(segments[segments.length - 1]?.end || 0)}
         </p>
       </div>
 
@@ -147,7 +161,7 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
                 key={i} 
                 className={cn(
                   "group relative flex gap-4 rounded-lg p-3 transition-colors",
-                  isEditing ? "bg-slate-800/80 ring-1 ring-teal-500/50" : "hover:bg-slate-800/40"
+                  isEditing ? "bg-slate-800/80 ring-1 ring-indigo-500/50" : "hover:bg-slate-800/40"
                 )}
               >
                 {/* Time & Actions */}
@@ -157,7 +171,7 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
                     className={cn(
                       "font-mono text-slate-400 transition-colors",
                       onTimestampClick
-                        ? "cursor-pointer hover:text-teal-400"
+                        ? "cursor-pointer hover:text-indigo-400"
                         : "cursor-default"
                     )}
                     title={onTimestampClick ? `Seek to ${formatTime(seg.start)}` : undefined}
@@ -169,9 +183,9 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
                   {!isEditing && (
                     <button 
                       onClick={() => startEditing(i, seg)}
-                      className="mt-1 flex items-center gap-1 font-medium text-slate-500 opacity-0 transition-opacity hover:text-teal-400 group-hover:opacity-100"
+                      className="mt-1 flex items-center gap-1 font-medium text-slate-500 opacity-0 transition-opacity hover:text-indigo-400 group-hover:opacity-100"
                     >
-                      <Edit2 className="h-3 w-3" /> Edit
+                      <Edit2 className="h-3 w-3" /> {t("edit")}
                     </button>
                   )}
                 </div>
@@ -186,30 +200,30 @@ export function TranscriptEditor({ jobId, onTimestampClick }: TranscriptEditorPr
                            type="text" 
                            value={editSpeaker}
                            onChange={(e) => setEditSpeaker(e.target.value)}
-                           className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200 outline-none focus:border-teal-500"
-                           placeholder="Speaker Name"
+                           className="rounded border border-slate-700 bg-slate-900 px-2 py-1 text-sm text-slate-200 outline-none focus:border-indigo-500"
+                           placeholder={t("speakerPlaceholder")}
                         />
                       </div>
                       <textarea 
                         value={editText}
                         onChange={(e) => setEditText(e.target.value)}
-                        className="min-h-[80px] w-full rounded border border-slate-700 bg-slate-900 p-2 text-sm text-slate-200 outline-none focus:border-teal-500"
+                        className="min-h-[80px] w-full rounded border border-slate-700 bg-slate-900 p-2 text-sm text-slate-200 outline-none focus:border-indigo-500"
                       />
                       <div className="flex items-center gap-2">
-                        <button 
+                        <button
                           onClick={() => saveSegment(i)}
                           disabled={isSaving}
-                          className="flex items-center gap-1.5 rounded bg-teal-500 px-3 py-1.5 text-xs font-medium text-teal-950 hover:bg-teal-400 disabled:opacity-50"
+                          className="flex items-center gap-1.5 rounded bg-indigo-500 px-3 py-1.5 text-xs font-medium text-white hover:bg-indigo-400 disabled:opacity-50"
                         >
                           {isSaving ? <Loader2 className="h-3 w-3 animate-spin"/> : <Save className="h-3 w-3"/>}
-                          Save
+                          {t("save")}
                         </button>
-                        <button 
+                        <button
                           onClick={cancelEditing}
                           disabled={isSaving}
                           className="px-3 py-1.5 text-xs font-medium text-slate-400 hover:text-white"
                         >
-                          Cancel
+                          {t("cancel")}
                         </button>
                       </div>
                     </div>
