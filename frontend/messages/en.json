@@ -135,7 +135,14 @@
     "retrievedVia": "retrieved via {level}-level search",
     "streaming": "streaming",
     "loading": "loading",
-    "ready": "ready"
+    "ready": "ready",
+    "contextPanel": "Context Reference",
+    "uploadFile": "Upload File",
+    "pasteText": "Or paste text",
+    "includeInPrompt": "Include in prompt",
+    "clearStars": "Clear all stars",
+    "chars": "chars",
+    "starred": "Starred"
   },
   "ProgressTimeline": {
     "pipelineProgress": "Pipeline Progress",

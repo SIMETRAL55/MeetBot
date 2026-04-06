@@ -132,11 +132,19 @@
     "segments": "セグメント",
     "section": "セクション",
     "sections": "セクション",
-    "retrievedVia": "{level}レベル検索で取得",
+    "retrievedVia": "{level}レベルの検索で取得",
     "streaming": "ストリーミング中",
     "loading": "読み込み中",
-    "ready": "準備完了"
-  },
+    "ready": "準備完了",
+    "contextPanel": "コンテキスト参照",
+    "uploadFile": "ファイルをアップロード",
+    "pasteText": "またはテキストを貼り付け",
+    "includeInPrompt": "プロンプトに含める",
+    "clearStars": "すべてのスターをクリア",
+    "chars": "文字",
+    "starred": "スター付き"
+    },
+
   "ProgressTimeline": {
     "pipelineProgress": "パイプラインの進捗",
     "nextSteps": "次のステップ",
