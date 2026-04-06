@@ -286,9 +286,14 @@ async def ws_chat(websocket: WebSocket, job_id: str) -> None:
     if retrieval_method not in ("vector", "pageindex"):
         retrieval_method = "vector"
 
+    starred_contexts: list = payload.get("starred_contexts", [])
+    reference_context: str = payload.get("reference_context", "")
+    reference_enabled: bool = payload.get("reference_enabled", False)
+
     logger.info(
-        "ws_chat: job=%s question=%r llm_mode=%s retrieval_method=%s",
+        "ws_chat: job=%s question=%r llm_mode=%s retrieval_method=%s starred=%d ref_enabled=%s",
         job_id[:8], question[:80], llm_mode, retrieval_method,
+        len(starred_contexts), reference_enabled,
     )
 
     # ── 3. Persist user message ──────────────────────────────────────────
@@ -316,6 +321,9 @@ async def ws_chat(websocket: WebSocket, job_id: str) -> None:
         abort_event=abort_event,
         retrieval_method=retrieval_method,
         job_id=job_id,
+        starred_contexts=starred_contexts,
+        reference_context=reference_context,
+        reference_enabled=reference_enabled,
     )
 
     # _relay_stream is now disconnect-safe: it captures last_event BEFORE

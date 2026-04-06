@@ -89,6 +89,7 @@ def _register_pages() -> None:
         api_update_setting,
         api_get_me,
         api_rename_speaker,
+        api_delete_chat_message,
     )
     app.add_api_route("/api/health",                   api_health,       methods=["GET"])
     app.add_api_route("/api/auth/login",             api_auth_login,   methods=["POST"])
@@ -115,6 +116,7 @@ def _register_pages() -> None:
     app.add_api_route("/api/jobs/{job_id}/cancel-pageindex", api_cancel_pageindex, methods=["POST"])
     app.add_api_route("/api/jobs/{job_id}/pageindex-tree", api_get_pageindex_tree, methods=["GET"])
     app.add_api_route("/api/jobs/{job_id}/rename-speaker", api_rename_speaker,    methods=["POST"])
+    app.add_api_route("/api/chat/messages/{message_id}", api_delete_chat_message, methods=["DELETE"])
     app.add_api_route("/api/settings",       api_get_settings,    methods=["GET"])
     app.add_api_route("/api/settings/{key}", api_update_setting,  methods=["PUT"])
     app.add_api_route("/api/me",             api_get_me,          methods=["GET"])

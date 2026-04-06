@@ -35,7 +35,7 @@ import logging
 from typing import Literal, Optional
 
 from fastapi import HTTPException, Query as QueryParam, UploadFile, File, Form, Request
-from fastapi.responses import JSONResponse, FileResponse, StreamingResponse
+from fastapi.responses import JSONResponse, FileResponse, StreamingResponse, Response
 from pydantic import BaseModel, Field
 from slowapi import Limiter
 from slowapi.util import get_remote_address
@@ -1846,3 +1846,67 @@ async def api_rename_speaker(request: Request, job_id: str) -> JSONResponse:
         db.close()
 
     return JSONResponse({"renamed": count})
+
+
+async def api_delete_chat_message(request: Request, message_id: str) -> JSONResponse:
+    """DELETE /api/chat/messages/{message_id}
+    
+    Deletes a user message and the following assistant response (the Q&A pair).
+    Only the user who owns the job can delete messages.
+    """
+    from .auth_middleware import get_optional_user
+    from ..db.models import ChatMessage, ChatSession, Job
+    from ..db.database import get_session
+
+    token_user = get_optional_user(request)
+    if not token_user:
+        return JSONResponse({"error": "Unauthorized"}, status_code=401)
+
+    SessionLocal = get_session()
+    db = SessionLocal()
+    try:
+        # 1. Fetch the message and verify it exists
+        msg = db.query(ChatMessage).filter(ChatMessage.id == message_id).first()
+        if msg is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # 2. Verify ownership: msg -> session -> job -> user_id
+        job = (
+            db.query(Job)
+            .join(ChatSession)
+            .filter(ChatSession.id == msg.session_id)
+            .first()
+        )
+        if job is None or job.user_id != token_user["sub"]:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        # 3. Rules: only allow starting delete from a "user" message
+        if msg.role != "user":
+            raise HTTPException(status_code=400, detail="Only user messages can be deleted to remove a Q&A pair")
+
+        # 4. Find the next message in the session (potential assistant response)
+        # We look for the message immediately following this one in the same session.
+        next_msg = (
+            db.query(ChatMessage)
+            .filter(
+                ChatMessage.session_id == msg.session_id,
+                ChatMessage.created_at >= msg.created_at,
+                ChatMessage.id != msg.id
+            )
+            .order_by(ChatMessage.created_at.asc())
+            .first()
+        )
+
+        # 5. Delete assistant reply if it exists
+        if next_msg and next_msg.role == "assistant":
+            db.delete(next_msg)
+            logger.info("Deleted assistant message %s following user msg %s", next_msg.id[:8], message_id[:8])
+
+        # 6. Delete the user message itself
+        db.delete(msg)
+        db.commit()
+        logger.info("Deleted user message %s and its Q&A pair", message_id[:8])
+
+        return Response(status_code=204)
+    finally:
+        db.close()

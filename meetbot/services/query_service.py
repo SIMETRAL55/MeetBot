@@ -997,6 +997,9 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
         segment_count: Optional[int] = None,
         retrieval_method: Optional[str] = None,
         job_id: Optional[str] = None,
+        starred_contexts: Optional[List[str]] = None,
+        reference_context: Optional[str] = None,
+        reference_enabled: bool = False,
     ) -> Iterator[Dict[str, Any]]:
         """
         RAG query with two-stage retrieval, MMR reranking, and
@@ -1041,6 +1044,9 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
                 hf_model=hf_model,
                 embedding_model=embedding_model,
                 abort_event=abort_event,
+                starred_contexts=starred_contexts,
+                reference_context=reference_context,
+                reference_enabled=reference_enabled,
             )
             return
 
@@ -1149,7 +1155,14 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
             "You are a helpful assistant. Answer the user's question using only "
             "the provided context. If the answer is not in the context, say so."
         )
-        user_content = f"{context_text}\n\nQuestion: {question}"
+
+        injected_prompt = ""
+        if starred_contexts:
+            injected_prompt += "[STARRED ANSWERS]\n" + "\n---\n".join(starred_contexts) + "\n\n"
+        if reference_enabled and reference_context:
+            injected_prompt += "[REFERENCE CONTEXT]\n" + reference_context + "\n\n"
+
+        user_content = f"{injected_prompt}{context_text}\n\n[QUESTION]\n{question}"
         prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
 
         messages = [
@@ -1232,6 +1245,9 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
         hf_model: str = "deepseek-ai/DeepSeek-V3.1",
         embedding_model: str = "./models/all-MiniLM-L6-v2",
         abort_event: Optional[threading.Event] = None,
+        starred_contexts: Optional[List[str]] = None,
+        reference_context: Optional[str] = None,
+        reference_enabled: bool = False,
     ) -> Iterator[Dict[str, Any]]:
         """
         PageIndex retrieval pipeline — alternative to the vector path.
@@ -1324,7 +1340,14 @@ Speakers are labeled with their names/identifiers. Timestamps indicate when the 
             "You are a helpful assistant. Answer the user's question using only "
             "the provided context. If the answer is not in the context, say so."
         )
-        user_content = f"{context_text}\n\nQuestion: {question}"
+
+        injected_prompt = ""
+        if starred_contexts:
+            injected_prompt += "[STARRED ANSWERS]\n" + "\n---\n".join(starred_contexts) + "\n\n"
+        if reference_enabled and reference_context:
+            injected_prompt += "[REFERENCE CONTEXT]\n" + reference_context + "\n\n"
+
+        user_content = f"{injected_prompt}{context_text}\n\n[QUESTION]\n{question}"
         prompt = f"[INST] {system_msg}\n\n{user_content} [/INST]"
         messages = [
             {"role": "system", "content": system_msg},
