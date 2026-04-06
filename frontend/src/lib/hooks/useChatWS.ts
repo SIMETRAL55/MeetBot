@@ -33,9 +33,10 @@ export function useChatWS(jobId: string) {
     try {
       const history = await api.getChatHistory(jobId);
       setMessages(history);
-    } catch (err: any) {
-      console.error("Failed to load chat history:", err);
-      setError(err.message || "Failed to load chat history");
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      console.error("Failed to load chat history:", errorMessage);
+      setError(errorMessage || "Failed to load chat history");
     } finally {
       setFetchingHistory(false);
     }
@@ -49,11 +50,32 @@ export function useChatWS(jobId: string) {
     }
   }, []);
 
+  const deleteMessagePair = useCallback((messageId: string) => {
+    setMessages((prev) => {
+      const idx = prev.findIndex((m) => m.id === messageId);
+      if (idx === -1) return prev;
+      
+      const next = [...prev];
+      // Remove the user message
+      next.splice(idx, 1);
+      
+      // If there's a following assistant message, remove it too
+      if (next[idx]?.role === "assistant") {
+        next.splice(idx, 1);
+      }
+      
+      return next;
+    });
+  }, []);
+
   const sendMessage = useCallback(
     (
       question: string,
       llmMode: "local" | "hf" = "local",
       retrievalMethod: "vector" | "pageindex" = "vector",
+      starredContexts: string[] = [],
+      referenceContext: string = "",
+      referenceEnabled: boolean = false
     ) => {
       if (!question.trim() || !jobId) return;
 
@@ -74,6 +96,9 @@ export function useChatWS(jobId: string) {
           question,
           llm_mode: llmMode,
           retrieval_method: retrievalMethod,
+          starred_contexts: starredContexts,
+          reference_context: referenceContext,
+          reference_enabled: referenceEnabled,
         }));
       };
 
@@ -169,5 +194,6 @@ export function useChatWS(jobId: string) {
     sendMessage,
     loadHistory,
     abortQuery,
+    deleteMessagePair,
   };
 }

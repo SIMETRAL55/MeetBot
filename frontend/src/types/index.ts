@@ -55,6 +55,7 @@ export interface ChatMessage {
   status?: string;
   created_at?: string;
   retrieval_level_note?: string;  // e.g. "segment" — set from retrieval_level_note WS event
+  isStarred?: boolean;
 }
 
 /* ── PageIndex tree types ─────────────────────────────────────────────────── */

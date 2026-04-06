@@ -13,6 +13,8 @@ import {
   Network,
   Settings2,
   ExternalLink,
+  Star,
+  Trash2,
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
@@ -22,6 +24,7 @@ import { useChatWS } from "@/lib/hooks/useChatWS";
 import { ChatSource, Job } from "@/types";
 import { api } from "@/lib/api";
 import { BackButton } from "@/components/BackButton";
+import { ContextPanel } from "@/components/ContextPanel";
 
 function fmtTime(secs: number): string {
   const h = Math.floor(secs / 3600);
@@ -160,8 +163,10 @@ export default function ChatPage() {
   const [retrievalMethod, setRetrievalMethod] = useState<RetrievalMethod>("vector");
   const [job, setJob] = useState<Job | null>(null);
   const [pageindexAvailable, setPageindexAvailable] = useState(false);
+  const [starredIds, setStarredIds] = useState<Set<number>>(new Set());
+  const [contextData, setContextData] = useState({ fileText: "", fileName: "", pastedText: "", enabled: false });
 
-  const { messages, loading, fetchingHistory, error, sendMessage, loadHistory, abortQuery } = useChatWS(id);
+  const { messages, loading, fetchingHistory, error, sendMessage, loadHistory, abortQuery, deleteMessagePair } = useChatWS(id);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -189,16 +194,26 @@ export default function ChatPage() {
     }
   }, [messages, loading]);
 
-  useEffect(() => {
-    if (!pageindexAvailable && retrievalMethod === "pageindex") {
-      setRetrievalMethod("vector");
-    }
-  }, [pageindexAvailable, retrievalMethod]);
+  const effectiveRetrievalMethod = (!pageindexAvailable && retrievalMethod === "pageindex") ? "vector" : retrievalMethod;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!input.trim() || loading) return;
-    sendMessage(input, llmMode, retrievalMethod);
+
+    const starredContexts = Array.from(starredIds)
+      .map(idx => messages[idx]?.content)
+      .filter(Boolean) as string[];
+
+    const referenceContext = [contextData.fileText, contextData.pastedText].filter(Boolean).join("\n\n");
+
+    sendMessage(
+      input, 
+      llmMode, 
+      effectiveRetrievalMethod, 
+      starredContexts, 
+      referenceContext, 
+      contextData.enabled
+    );
     setInput("");
   };
 
@@ -206,6 +221,31 @@ export default function ChatPage() {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
       handleSubmit(e);
+    }
+  };
+
+  const toggleStar = (idx: number) => {
+    setStarredIds(prev => {
+      const next = new Set(prev);
+      if (next.has(idx)) next.delete(idx);
+      else next.add(idx);
+      return next;
+    });
+  };
+
+  const clearStars = () => {
+    setStarredIds(new Set());
+  };
+
+  const handleDelete = async (messageId: string) => {
+    if (!window.confirm("Delete this question and its answer?")) return;
+    try {
+      await api.deleteChatMessage(messageId);
+      deleteMessagePair(messageId);
+    } catch (err) {
+      console.error("Failed to delete message:", err);
+      const errorMessage = err instanceof Error ? err.message : "Failed to delete message";
+      alert(errorMessage);
     }
   };
 
@@ -255,7 +295,7 @@ export default function ChatPage() {
               </p>
             </div>
             <PillToggle
-              value={retrievalMethod}
+              value={effectiveRetrievalMethod}
               onChange={(v) => setRetrievalMethod(v as RetrievalMethod)}
               options={[
                 { label: t("vector"), value: "vector" },
@@ -296,6 +336,29 @@ export default function ChatPage() {
 
           <div className="h-px bg-white/5" />
 
+          {/* Starred section */}
+          {starredIds.size > 0 && (
+            <div>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <Star className="h-3 w-3 text-amber-500 fill-amber-500/20" />
+                  <p className="font-mono-editorial text-[9px] font-semibold uppercase tracking-[0.15em] text-slate-700">
+                    {t("starred")} ({starredIds.size})
+                  </p>
+                </div>
+                <button
+                  onClick={clearStars}
+                  className="group flex items-center gap-1 text-[9px] font-semibold uppercase tracking-[0.05em] text-slate-700 hover:text-red-400"
+                >
+                  <Trash2 className="h-2.5 w-2.5 transition-colors group-hover:text-red-400" />
+                  {t("clearStars")}
+                </button>
+              </div>
+            </div>
+          )}
+
+          <div className="h-px bg-white/5" />
+
           {/* Job link */}
           <a
             href={`/job/${id}`}
@@ -327,7 +390,7 @@ export default function ChatPage() {
             messages.map((msg, i) => (
               <div
                 key={i}
-                className={`animate-message-in flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
+                className={`group animate-message-in flex gap-3 ${msg.role === "user" ? "justify-end" : "justify-start"}`}
               >
                 {msg.role === "assistant" && (
                   <div className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-indigo-500/10 ring-1 ring-indigo-500/20">
@@ -336,12 +399,35 @@ export default function ChatPage() {
                 )}
 
                 <div
-                  className={`max-w-[80%] sm:max-w-[72%] ${
+                  className={`relative max-w-[80%] sm:max-w-[72%] ${
                     msg.role === "user"
                       ? "rounded-2xl rounded-tr-sm bg-indigo-500/8 px-5 py-3.5 text-slate-100 ring-1 ring-indigo-500/15"
                       : "rounded-2xl rounded-tl-sm bg-[#0e1220] px-5 py-4 text-slate-300 ring-1 ring-white/6 border-l-2 border-indigo-500/20"
                   }`}
                 >
+                  {msg.role === "assistant" && (
+                    <button
+                      onClick={() => toggleStar(i)}
+                      className={`absolute -right-10 top-2 p-2 rounded-full transition-all duration-200 ${
+                        starredIds.has(i)
+                          ? "bg-amber-500/10 text-amber-500"
+                          : "text-slate-700 hover:text-slate-400 opacity-0 group-hover:opacity-100"
+                      }`}
+                    >
+                      <Star className={`h-4 w-4 ${starredIds.has(i) ? "fill-current" : ""}`} />
+                    </button>
+                  )}
+
+                  {msg.role === "user" && msg.id && (
+                    <button
+                      onClick={() => handleDelete(msg.id!)}
+                      className="absolute -left-10 top-2 p-2 rounded-full text-slate-700 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all duration-200"
+                      title="Delete question and answer"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+
                   {msg.role === "assistant" ? (
                     <div className="prose prose-sm prose-invert max-w-none prose-p:leading-relaxed prose-p:text-slate-300 prose-pre:bg-[#080b14] prose-pre:border prose-pre:border-white/5 prose-code:text-indigo-300 prose-headings:text-slate-200">
                       {msg.content ? (
@@ -432,6 +518,9 @@ export default function ChatPage() {
           </p>
         </div>
       </div>
+
+      {/* ── Right sidebar ─────────────────────────────────────────────────── */}
+      <ContextPanel onContextChange={(data) => setContextData(data)} />
     </div>
   );
 }

@@ -204,6 +204,10 @@ export const api = {
 
   getChatHistory: (jobId: string) => fetcher<import("../types").ChatMessage[]>(`/jobs/${jobId}/chat/history`),
 
+  deleteChatMessage: (messageId: string) => fetcher<void>(`/chat/messages/${messageId}`, {
+    method: "DELETE"
+  }),
+
   getPageIndexTree: (jobId: string) => fetcher<import("../types").PageIndexTree>(`/jobs/${jobId}/pageindex-tree`),
 
   // --- Settings & Profile ---
