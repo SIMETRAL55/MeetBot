@@ -198,3 +198,4 @@ CLAUDE.md
 tasks/
 .claude/
 docs/
+.worktrees/
