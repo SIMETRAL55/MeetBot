@@ -142,8 +142,6 @@ MeetBot/
 │   │       ├── reranker.py    MMR cosine reranker
 │   │       ├── selector.py    Context window selection after reranking
 │   │       ├── summarizer.py  Answer-embedding source filtering
-│   │       └── intent.py      RetrievalLevel type definitions
-│   │       └── intent.py      RetrievalLevel type definitions
 │   ├── workers/               Background job processing
 │   ├── web/                   Legacy NiceGUI app & New FastAPI Backend
 │   │   ├── main.py            App initialisation, CORS config, and route registration
