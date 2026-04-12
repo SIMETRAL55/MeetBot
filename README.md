@@ -29,6 +29,12 @@ Runs fully offline on CPU. GPU and cloud APIs are also supported.
 
 ---
 
+## Demo
+
+<video src="img/meetbot_demo.webm" controls width="100%"></video>
+
+---
+
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
