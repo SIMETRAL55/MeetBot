@@ -10,6 +10,25 @@ Runs fully offline on CPU. GPU and cloud APIs are also supported.
 
 ---
 
+## Features
+
+- **Transcription** — Local GPU (faster-whisper / Whisper large-v3) or HuggingFace Inference API
+- **Speaker diarization** — Pyannote Audio 3.1 labels every speaker turn with timestamps
+- **Alignment** — Merges Whisper segments and Pyannote intervals into speaker-labelled turns
+- **Multi-level RAG indexing** — ChromaDB index at document, segment, and chunk granularity; memory-safe streaming pipeline with atomic index swap
+- **PageIndex** — Lightweight positional index for page-aware retrieval alongside the vector index
+- **Streaming Q&A chat** — Token-by-token answers via local GGUF (llama.cpp) or HuggingFace Inference API; context references passed from the UI into each prompt
+- **Persistent chat history** — Per-job conversation sessions stored in SQLite; individual messages can be deleted
+- **Transcript editing + incremental reindex** — Edit speaker names or text in the UI; rebuild only changed segments
+- **Speaker rename** — Rename a speaker label across all segments in one operation
+- **Download outputs** — Aligned JSON, raw Whisper transcription, and Pyannote diarization JSON
+- **Authentication** — JWT Bearer tokens for REST endpoints; NiceGUI session for legacy pages
+- **Web UI** — Next.js 16 / React 19 / Tailwind SPA (port 3000)
+- **REST + WebSocket API** — FastAPI backend (port 8080); all core operations are machine-readable
+- **CLI** — Batch transcribe, index, and query from the command line
+
+---
+
 ## Table of Contents
 
 1. [Project Overview](#1-project-overview)
