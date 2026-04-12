@@ -33,7 +33,7 @@ Runs fully offline on CPU. GPU and cloud APIs are also supported.
 
 <!-- <video src="img/meetbot_demo.webm" controls width="100%"></video> -->
 
-![DAshboard](https://raw.githubusercontent.com/SIMETRAL55/MeetBot/refs/heads/main/img/dashboard.png)
+![Dashboard](https://raw.githubusercontent.com/SIMETRAL55/MeetBot/refs/heads/main/img/dashboard.png)
 ![Processing](https://raw.githubusercontent.com/SIMETRAL55/MeetBot/refs/heads/main/img/1.png)
 ![PageIndex](https://raw.githubusercontent.com/SIMETRAL55/MeetBot/refs/heads/main/img/2.png)
 ![Chat](https://raw.githubusercontent.com/SIMETRAL55/MeetBot/refs/heads/main/img/3.png)
